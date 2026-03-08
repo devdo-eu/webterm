@@ -59,6 +59,14 @@
     .git-D  { color: #f85149; }
     .git-R  { color: #a371f7; }
     .git-U  { color: #8b949e; }
+    .git-I  { color: #484f58; }
+    .file-entry.git-status-M .file-name { color: #d29922 !important; }
+    .file-entry.git-status-A .file-name { color: #3fb950 !important; }
+    .file-entry.git-status-D .file-name { color: #f85149 !important; text-decoration: line-through; }
+    .file-entry.git-status-R .file-name { color: #a371f7 !important; }
+    .file-entry.git-status-U .file-name { color: #8b949e !important; }
+    .file-entry.git-status-I .file-name { color: #484f58 !important; }
+    .file-entry.git-status-I .file-icon { color: #484f58 !important; }
 
     /* --- Terminal --- */
     #terminal-wrap { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
@@ -454,18 +462,24 @@
       return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
     }
 
-    function gitBadge(status) {
+    function gitStatusCls(status) {
       if (!status) return "";
       const first = status[0] !== "?" ? status[0] : "";
       const second = status.length > 1 ? status[1] : "";
-      let label, cls;
-      if (status === "??") { label = "?"; cls = "git-U"; }
-      else if (first === "A")  { label = "A"; cls = "git-A"; }
-      else if (first === "R")  { label = "R"; cls = "git-R"; }
-      else if (first === "D" || second === "D") { label = "D"; cls = "git-D"; }
-      else if (first === "M" || second === "M") { label = "M"; cls = "git-M"; }
-      else { label = status; cls = "git-U"; }
-      return `<span class="git-badge ${cls}">${label}</span>`;
+      if (status === "!!") return "I";
+      if (status === "??") return "U";
+      if (first === "A") return "A";
+      if (first === "R") return "R";
+      if (first === "D" || second === "D") return "D";
+      if (first === "M" || second === "M") return "M";
+      return "U";
+    }
+
+    function gitBadge(status) {
+      if (!status) return "";
+      const c = gitStatusCls(status);
+      const label = c === "U" && status !== "??" ? status : (c === "U" ? "?" : c);
+      return `<span class="git-badge git-${c}">${label}</span>`;
     }
 
     async function fetchDir(path) {
@@ -525,8 +539,9 @@
         const expanded = f.isDir && expandedDirs.has(fullPath);
         const dirCls = f.isDir ? " is-dir" : "";
         const activeCls = !f.isDir && editorFilePath && samePath(fullPath, editorFilePath) ? " active" : "";
+        const gCls = f.git ? " git-status-" + gitStatusCls(f.git) : "";
         const icon = f.isDir ? (expanded ? "\u25BE" : "\u25B8") : "\u00B7";
-        html += `<div class="file-entry${dirCls}${activeCls}" ${f.isDir ? `data-dir="${esc(fullPath)}"` : `data-file="${esc(fullPath)}"`} style="padding-left:${pad}px">
+        html += `<div class="file-entry${dirCls}${activeCls}${gCls}" ${f.isDir ? `data-dir="${esc(fullPath)}"` : `data-file="${esc(fullPath)}"`} style="padding-left:${pad}px">
           <span class="file-icon">${icon}</span>
           <span class="file-name">${esc(f.name)}</span>
           ${gitBadge(f.git)}

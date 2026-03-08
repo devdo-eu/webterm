@@ -147,7 +147,7 @@ func getGitStatuses(dir string) map[string]string {
 	}
 	root := strings.TrimSpace(string(rootBytes))
 
-	out, err := exec.Command("git", "-C", root, "status", "--porcelain", "-u").Output()
+	out, err := exec.Command("git", "-C", root, "status", "--porcelain", "-u", "--ignored").Output()
 	if err != nil {
 		return nil
 	}
@@ -161,6 +161,20 @@ func getGitStatuses(dir string) map[string]string {
 		relDir = ""
 	} else {
 		relDir += "/"
+	}
+
+	gitPriority := map[string]int{"M": 4, "A": 3, "D": 2, "R": 1, "??": 0, "!!": -1}
+	prio := func(status string) int {
+		if p, ok := gitPriority[status]; ok {
+			return p
+		}
+		s := strings.TrimSpace(status)
+		if len(s) > 0 {
+			if p, ok := gitPriority[string(s[0])]; ok {
+				return p
+			}
+		}
+		return -1
 	}
 
 	statuses := make(map[string]string)
@@ -181,7 +195,7 @@ func getGitStatuses(dir string) map[string]string {
 
 		name := strings.SplitN(strings.TrimPrefix(filePath, relDir), "/", 2)[0]
 
-		if _, exists := statuses[name]; !exists {
+		if prev, exists := statuses[name]; !exists || prio(status) > prio(prev) {
 			statuses[name] = status
 		}
 	}
