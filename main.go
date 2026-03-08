@@ -12,8 +12,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
+	"unsafe"
 
 	"github.com/UserExistsError/conpty"
 	"github.com/gorilla/websocket"
@@ -258,14 +262,217 @@ func handleWS(w http.ResponseWriter, r *http.Request, shell string) {
 	}
 }
 
+// --- Resource monitor ---
+
+var (
+	modKernel32              = syscall.NewLazyDLL("kernel32.dll")
+	modIphlpapi              = syscall.NewLazyDLL("iphlpapi.dll")
+	procGetSystemTimes       = modKernel32.NewProc("GetSystemTimes")
+	procGlobalMemoryStatusEx = modKernel32.NewProc("GlobalMemoryStatusEx")
+	procGetIfTable           = modIphlpapi.NewProc("GetIfTable")
+)
+
+type memStatusEx struct {
+	Length               uint32
+	MemoryLoad           uint32
+	TotalPhys            uint64
+	AvailPhys            uint64
+	TotalPageFile        uint64
+	AvailPageFile        uint64
+	TotalVirtual         uint64
+	AvailVirtual         uint64
+	AvailExtendedVirtual uint64
+}
+
+type mibIfRow struct {
+	Name            [256]uint16
+	Index           uint32
+	Type            uint32
+	Mtu             uint32
+	Speed           uint32
+	PhysAddrLen     uint32
+	PhysAddr        [8]byte
+	AdminStatus     uint32
+	OperStatus      uint32
+	LastChange      uint32
+	InOctets        uint32
+	InUcastPkts     uint32
+	InNUcastPkts    uint32
+	InDiscards      uint32
+	InErrors        uint32
+	InUnknownProtos uint32
+	OutOctets       uint32
+	OutUcastPkts    uint32
+	OutNUcastPkts   uint32
+	OutDiscards     uint32
+	OutErrors       uint32
+	DescrLen        uint32
+	Descr           [256]byte
+}
+
+type statsResponse struct {
+	CPU float64  `json:"cpu"`
+	RAM ramInfo  `json:"ram"`
+	GPU *gpuInfo `json:"gpu"`
+	Net netInfo  `json:"net"`
+}
+
+type ramInfo struct {
+	Used  uint64 `json:"used"`
+	Total uint64 `json:"total"`
+}
+
+type gpuInfo struct {
+	Usage    int    `json:"usage"`
+	MemUsed  int    `json:"memUsed"`
+	MemTotal int    `json:"memTotal"`
+	Name     string `json:"name"`
+}
+
+type netInfo struct {
+	Rx uint64 `json:"rx"`
+	Tx uint64 `json:"tx"`
+}
+
+var (
+	statsMu     sync.Mutex
+	latestStats statsResponse
+)
+
+func cpuTimes() (idle, total uint64) {
+	var idleFt, kernelFt, userFt [2]uint32
+	procGetSystemTimes.Call(
+		uintptr(unsafe.Pointer(&idleFt)),
+		uintptr(unsafe.Pointer(&kernelFt)),
+		uintptr(unsafe.Pointer(&userFt)),
+	)
+	idle = uint64(idleFt[1])<<32 | uint64(idleFt[0])
+	total = (uint64(kernelFt[1])<<32 | uint64(kernelFt[0])) +
+		(uint64(userFt[1])<<32 | uint64(userFt[0]))
+	return
+}
+
+func ramStats() ramInfo {
+	var ms memStatusEx
+	ms.Length = uint32(unsafe.Sizeof(ms))
+	procGlobalMemoryStatusEx.Call(uintptr(unsafe.Pointer(&ms)))
+	return ramInfo{Used: ms.TotalPhys - ms.AvailPhys, Total: ms.TotalPhys}
+}
+
+func netTotals() (rx, tx uint64) {
+	var size uint32
+	procGetIfTable.Call(0, uintptr(unsafe.Pointer(&size)), 0)
+	if size == 0 {
+		return
+	}
+	buf := make([]byte, size)
+	ret, _, _ := procGetIfTable.Call(
+		uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(unsafe.Pointer(&size)),
+		0,
+	)
+	if ret != 0 {
+		return
+	}
+	n := *(*uint32)(unsafe.Pointer(&buf[0]))
+	rowSz := int(unsafe.Sizeof(mibIfRow{}))
+	for i := 0; i < int(n); i++ {
+		off := 4 + i*rowSz
+		row := (*mibIfRow)(unsafe.Pointer(&buf[off]))
+		if row.OperStatus != 1 || row.Type == 24 {
+			continue
+		}
+		rx += uint64(row.InOctets)
+		tx += uint64(row.OutOctets)
+	}
+	return
+}
+
+func gpuStats() *gpuInfo {
+	out, err := exec.Command("nvidia-smi",
+		"--query-gpu=utilization.gpu,memory.used,memory.total,name",
+		"--format=csv,noheader,nounits").Output()
+	if err != nil {
+		return nil
+	}
+	parts := strings.Split(strings.TrimSpace(string(out)), ", ")
+	if len(parts) < 4 {
+		return nil
+	}
+	usage, _ := strconv.Atoi(strings.TrimSpace(parts[0]))
+	memUsed, _ := strconv.Atoi(strings.TrimSpace(parts[1]))
+	memTotal, _ := strconv.Atoi(strings.TrimSpace(parts[2]))
+	return &gpuInfo{
+		Usage: usage, MemUsed: memUsed, MemTotal: memTotal,
+		Name: strings.TrimSpace(parts[3]),
+	}
+}
+
+func statsCollector() {
+	prevIdle, prevTotal := cpuTimes()
+	prevRx, prevTx := netTotals()
+	prevTime := time.Now()
+	hasGPU := true
+
+	for {
+		time.Sleep(1 * time.Second)
+
+		idle, total := cpuTimes()
+		dIdle, dTotal := idle-prevIdle, total-prevTotal
+		var cpu float64
+		if dTotal > 0 {
+			cpu = (1 - float64(dIdle)/float64(dTotal)) * 100
+		}
+		prevIdle, prevTotal = idle, total
+
+		ram := ramStats()
+
+		rx, tx := netTotals()
+		now := time.Now()
+		dt := now.Sub(prevTime).Seconds()
+		var nRx, nTx uint64
+		if dt > 0 {
+			if rx >= prevRx {
+				nRx = uint64(float64(rx-prevRx) / dt)
+			}
+			if tx >= prevTx {
+				nTx = uint64(float64(tx-prevTx) / dt)
+			}
+		}
+		prevRx, prevTx, prevTime = rx, tx, now
+
+		var gpu *gpuInfo
+		if hasGPU {
+			gpu = gpuStats()
+			if gpu == nil {
+				hasGPU = false
+			}
+		}
+
+		statsMu.Lock()
+		latestStats = statsResponse{CPU: cpu, RAM: ram, GPU: gpu, Net: netInfo{Rx: nRx, Tx: nTx}}
+		statsMu.Unlock()
+	}
+}
+
+func handleStats(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	statsMu.Lock()
+	s := latestStats
+	statsMu.Unlock()
+	json.NewEncoder(w).Encode(s)
+}
+
 // --- Main ---
 
 func main() {
 	cfg := loadConfig()
+	go statsCollector()
 
 	publicFS, _ := fs.Sub(staticFiles, "public")
 	http.Handle("/", http.FileServer(http.FS(publicFS)))
 	http.HandleFunc("/api/files", handleFiles)
+	http.HandleFunc("/api/stats", handleStats)
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		handleWS(w, r, cfg.Shell)
 	})

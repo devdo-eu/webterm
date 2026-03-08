@@ -6,6 +6,7 @@ Web-based terminal with a file explorer sidebar. Runs on Windows using ConPTY.
 
 - **Terminal** — full PTY terminal in the browser via WebSocket + [xterm.js](https://xtermjs.org/)
 - **File explorer** — sidebar with tree view (expand/collapse), git status badges (M/A/D/R/?), and current branch display
+- **Resource monitor** — status bar with CPU, RAM, GPU (NVIDIA), and network throughput
 - **Shell integration** — file explorer auto-syncs with terminal CWD via OSC 7 (PowerShell, pwsh, cmd.exe)
 - **Configuration** — `webterm.ini` file for port and shell settings
 - **Single binary** — all static assets embedded via Go `embed`

@@ -9,7 +9,8 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { height: 100%; background: #0d1117; overflow: hidden; font-family: Consolas, 'Courier New', monospace; color: #c9d1d9; }
 
-    #app { display: flex; height: 100%; }
+    #app { display: flex; flex-direction: column; height: 100%; }
+    #main-area { display: flex; flex: 1; overflow: hidden; }
 
     /* --- Sidebar --- */
     #sidebar {
@@ -62,6 +63,44 @@
     #terminal-wrap { flex: 1; overflow: hidden; }
     #terminal { height: 100%; }
 
+    /* --- Status bar --- */
+    #status-bar {
+      height: 26px;
+      background: #161b22;
+      border-top: 1px solid #30363d;
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      font-size: 12px;
+      color: #8b949e;
+      flex-shrink: 0;
+      gap: 6px;
+    }
+    .stat-item { display: flex; align-items: center; gap: 5px; }
+    .stat-label { color: #484f58; font-size: 11px; }
+    .stat-value { color: #c9d1d9; font-size: 11px; font-variant-numeric: tabular-nums; }
+    .stat-bar {
+      display: inline-block;
+      width: 48px; height: 4px;
+      background: #21262d;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .stat-bar-fill {
+      display: block;
+      height: 100%;
+      border-radius: 2px;
+      transition: width 1s ease;
+    }
+    .bar-cpu { background: #58a6ff; }
+    .bar-ram { background: #3fb950; }
+    .bar-gpu { background: #a371f7; }
+    .stat-sep {
+      width: 1px; height: 14px;
+      background: #30363d;
+      margin: 0 4px;
+    }
+
     /* scrollbar */
     #file-list::-webkit-scrollbar { width: 6px; }
     #file-list::-webkit-scrollbar-track { background: transparent; }
@@ -70,6 +109,7 @@
 </head>
 <body>
   <div id="app">
+    <div id="main-area">
     <div id="sidebar">
       <div id="sidebar-header">
         <div id="sidebar-path"></div>
@@ -79,6 +119,31 @@
     </div>
     <div id="terminal-wrap">
       <div id="terminal"></div>
+    </div>
+    </div>
+    <div id="status-bar">
+      <div class="stat-item">
+        <span class="stat-label">CPU</span>
+        <span class="stat-bar"><span id="bar-cpu" class="stat-bar-fill bar-cpu"></span></span>
+        <span id="stat-cpu" class="stat-value">&mdash;</span>
+      </div>
+      <div class="stat-sep"></div>
+      <div class="stat-item">
+        <span class="stat-label">RAM</span>
+        <span class="stat-bar"><span id="bar-ram" class="stat-bar-fill bar-ram"></span></span>
+        <span id="stat-ram" class="stat-value">&mdash;</span>
+      </div>
+      <div id="stat-gpu-sep" class="stat-sep" style="display:none"></div>
+      <div id="stat-gpu-wrap" class="stat-item" style="display:none">
+        <span class="stat-label">GPU</span>
+        <span class="stat-bar"><span id="bar-gpu" class="stat-bar-fill bar-gpu"></span></span>
+        <span id="stat-gpu" class="stat-value">&mdash;</span>
+      </div>
+      <div class="stat-sep"></div>
+      <div class="stat-item">
+        <span class="stat-label">NET</span>
+        <span id="stat-net" class="stat-value">&mdash;</span>
+      </div>
     </div>
   </div>
 
@@ -234,6 +299,48 @@
       }
       return true;
     });
+
+    // ---- Resource monitor ----
+    function fmtSpeed(b) {
+      if (b < 1024) return b + ' B/s';
+      if (b < 1048576) return (b / 1024).toFixed(1) + ' KB/s';
+      return (b / 1048576).toFixed(1) + ' MB/s';
+    }
+
+    async function updateStats() {
+      try {
+        const r = await fetch('/api/stats');
+        const s = await r.json();
+
+        document.getElementById('stat-cpu').textContent = s.cpu.toFixed(1) + '%';
+        document.getElementById('bar-cpu').style.width = Math.min(100, s.cpu).toFixed(1) + '%';
+
+        const ramPct = s.ram.total > 0 ? (s.ram.used / s.ram.total * 100) : 0;
+        document.getElementById('stat-ram').textContent =
+          (s.ram.used / 1073741824).toFixed(1) + ' / ' + (s.ram.total / 1073741824).toFixed(1) + ' GB';
+        document.getElementById('bar-ram').style.width = ramPct.toFixed(1) + '%';
+
+        const gpuWrap = document.getElementById('stat-gpu-wrap');
+        const gpuSep = document.getElementById('stat-gpu-sep');
+        if (s.gpu) {
+          gpuWrap.style.display = 'flex';
+          gpuSep.style.display = '';
+          document.getElementById('stat-gpu').textContent =
+            s.gpu.usage + '%  ' + s.gpu.memUsed + '/' + s.gpu.memTotal + ' MB';
+          document.getElementById('bar-gpu').style.width = s.gpu.usage + '%';
+          gpuWrap.title = s.gpu.name;
+        } else {
+          gpuWrap.style.display = 'none';
+          gpuSep.style.display = 'none';
+        }
+
+        document.getElementById('stat-net').textContent =
+          '\u2193 ' + fmtSpeed(s.net.rx) + '  \u2191 ' + fmtSpeed(s.net.tx);
+      } catch(e) {}
+    }
+
+    setInterval(updateStats, 1000);
+    updateStats();
 
     loadRoot("");
   </script>
