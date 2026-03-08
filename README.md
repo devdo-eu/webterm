@@ -2,6 +2,10 @@
 
 Web-based terminal with a file explorer sidebar. Runs on Windows using ConPTY.
 
+Single Go binary, zero dependencies — just run `webterm.exe` and open the browser.
+
+![webterm screenshot](public/webterm.jpg)
+
 ## Features
 
 - **Terminal** — full PTY terminal in the browser via WebSocket + [xterm.js](https://xtermjs.org/), multiple tabs with independent sessions, tab names auto-update to show the running command
@@ -61,8 +65,34 @@ make test
 
 This cross-compiles the test binary in Docker and runs it locally on Windows.
 
+## Architecture
+
+Two files — that's it:
+
+| File | Role |
+|------|------|
+| `main.go` | HTTP server, WebSocket terminal, REST API, auth, resource monitor |
+| `public/index.html` | Single-page frontend — xterm.js, file explorer, editor, status bar |
+
+All static assets are embedded into the binary via Go `embed`, so the final artifact is a single `.exe` with no external files needed.
+
+### How it works
+
+```
+Browser ──WebSocket──► Go server ──ConPTY──► powershell / cmd
+   │                      │
+   ├── GET /api/files ────┤  (directory listing + git status)
+   ├── GET /api/stats ────┤  (CPU, RAM, GPU, network)
+   └── POST /api/login ───┘  (Windows LogonUserW auth)
+```
+
 ## Tech stack
 
 - **Backend**: Go 1.22, [conpty](https://github.com/UserExistsError/conpty), [gorilla/websocket](https://github.com/gorilla/websocket)
-- **Frontend**: xterm.js 5, vanilla JS
+- **Frontend**: [xterm.js 5](https://xtermjs.org/), [CodeMirror 5](https://codemirror.net/5/), vanilla JS — no bundler, no frameworks
 - **Build**: Docker Compose (golang:1.22-alpine)
+- **Platform**: Windows only (ConPTY, WMI, Win32 syscalls)
+
+## License
+
+MIT
