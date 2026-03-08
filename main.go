@@ -371,10 +371,11 @@ type mibIfRow struct {
 }
 
 type statsResponse struct {
-	CPU float64  `json:"cpu"`
-	RAM ramInfo  `json:"ram"`
-	GPU *gpuInfo `json:"gpu"`
-	Net netInfo  `json:"net"`
+	CPU     float64  `json:"cpu"`
+	RAM     ramInfo  `json:"ram"`
+	GPU     *gpuInfo `json:"gpu"`
+	Net     netInfo  `json:"net"`
+	CPUTemp *float64 `json:"cpuTemp"`
 }
 
 type ramInfo struct {
@@ -383,10 +384,12 @@ type ramInfo struct {
 }
 
 type gpuInfo struct {
-	Usage    int    `json:"usage"`
-	MemUsed  int    `json:"memUsed"`
-	MemTotal int    `json:"memTotal"`
-	Name     string `json:"name"`
+	Usage    int     `json:"usage"`
+	MemUsed  int     `json:"memUsed"`
+	MemTotal int     `json:"memTotal"`
+	Name     string  `json:"name"`
+	Power    float64 `json:"power"`
+	Temp     int     `json:"temp"`
 }
 
 type netInfo struct {
@@ -448,23 +451,50 @@ func netTotals() (rx, tx uint64) {
 	return
 }
 
+func cpuTemp() (float64, bool) {
+	out, err := exec.Command("wmic", "/namespace:\\\\root\\wmi", "PATH",
+		"MSAcpi_ThermalZoneTemperature", "get", "CurrentTemperature", "/value").Output()
+	if err != nil {
+		return 0, false
+	}
+	var maxTemp float64
+	found := false
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "CurrentTemperature=") {
+			valStr := strings.TrimPrefix(line, "CurrentTemperature=")
+			val, err := strconv.Atoi(strings.TrimSpace(valStr))
+			if err == nil && val > 0 {
+				c := float64(val)/10.0 - 273.15
+				if c > maxTemp {
+					maxTemp = c
+				}
+				found = true
+			}
+		}
+	}
+	return maxTemp, found
+}
+
 func gpuStats() *gpuInfo {
 	out, err := exec.Command("nvidia-smi",
-		"--query-gpu=utilization.gpu,memory.used,memory.total,name",
+		"--query-gpu=utilization.gpu,memory.used,memory.total,name,power.draw,temperature.gpu",
 		"--format=csv,noheader,nounits").Output()
 	if err != nil {
 		return nil
 	}
 	parts := strings.Split(strings.TrimSpace(string(out)), ", ")
-	if len(parts) < 4 {
+	if len(parts) < 6 {
 		return nil
 	}
 	usage, _ := strconv.Atoi(strings.TrimSpace(parts[0]))
 	memUsed, _ := strconv.Atoi(strings.TrimSpace(parts[1]))
 	memTotal, _ := strconv.Atoi(strings.TrimSpace(parts[2]))
+	power, _ := strconv.ParseFloat(strings.TrimSpace(parts[4]), 64)
+	temp, _ := strconv.Atoi(strings.TrimSpace(parts[5]))
 	return &gpuInfo{
 		Usage: usage, MemUsed: memUsed, MemTotal: memTotal,
-		Name: strings.TrimSpace(parts[3]),
+		Name: strings.TrimSpace(parts[3]), Power: power, Temp: temp,
 	}
 }
 
@@ -473,6 +503,7 @@ func statsCollector() {
 	prevRx, prevTx := netTotals()
 	prevTime := time.Now()
 	hasGPU := true
+	hasCPUTemp := true
 
 	for {
 		time.Sleep(1 * time.Second)
@@ -509,8 +540,17 @@ func statsCollector() {
 			}
 		}
 
+		var ct *float64
+		if hasCPUTemp {
+			if t, ok := cpuTemp(); ok {
+				ct = &t
+			} else {
+				hasCPUTemp = false
+			}
+		}
+
 		statsMu.Lock()
-		latestStats = statsResponse{CPU: cpu, RAM: ram, GPU: gpu, Net: netInfo{Rx: nRx, Tx: nTx}}
+		latestStats = statsResponse{CPU: cpu, RAM: ram, GPU: gpu, Net: netInfo{Rx: nRx, Tx: nTx}, CPUTemp: ct}
 		statsMu.Unlock()
 	}
 }

@@ -214,6 +214,16 @@
         <span class="stat-bar"><span id="bar-gpu" class="stat-bar-fill bar-gpu"></span></span>
         <span id="stat-gpu" class="stat-value">&mdash;</span>
       </div>
+      <div id="stat-pwr-sep" class="stat-sep" style="display:none"></div>
+      <div id="stat-pwr-wrap" class="stat-item" style="display:none">
+        <span class="stat-label">PWR</span>
+        <span id="stat-pwr" class="stat-value">&mdash;</span>
+      </div>
+      <div id="stat-temp-sep" class="stat-sep" style="display:none"></div>
+      <div id="stat-temp-wrap" class="stat-item" style="display:none">
+        <span class="stat-label">TEMP</span>
+        <span id="stat-temp" class="stat-value">&mdash;</span>
+      </div>
       <div class="stat-sep"></div>
       <div class="stat-item">
         <span class="stat-label">NET</span>
@@ -553,6 +563,10 @@
 
         const gpuWrap = document.getElementById('stat-gpu-wrap');
         const gpuSep = document.getElementById('stat-gpu-sep');
+        const pwrWrap = document.getElementById('stat-pwr-wrap');
+        const pwrSep = document.getElementById('stat-pwr-sep');
+        const tempWrap = document.getElementById('stat-temp-wrap');
+        const tempSep = document.getElementById('stat-temp-sep');
         if (s.gpu) {
           gpuWrap.style.display = 'flex';
           gpuSep.style.display = '';
@@ -560,9 +574,26 @@
             s.gpu.usage + '%  ' + s.gpu.memUsed + '/' + s.gpu.memTotal + ' MB';
           document.getElementById('bar-gpu').style.width = s.gpu.usage + '%';
           gpuWrap.title = s.gpu.name;
+          pwrWrap.style.display = 'flex';
+          pwrSep.style.display = '';
+          document.getElementById('stat-pwr').textContent = s.gpu.power.toFixed(0) + ' W';
         } else {
           gpuWrap.style.display = 'none';
           gpuSep.style.display = 'none';
+          pwrWrap.style.display = 'none';
+          pwrSep.style.display = 'none';
+        }
+
+        const temps = [];
+        if (s.cpuTemp != null) temps.push('CPU ' + s.cpuTemp.toFixed(0) + '\u00b0C');
+        if (s.gpu) temps.push('GPU ' + s.gpu.temp + '\u00b0C');
+        if (temps.length > 0) {
+          tempWrap.style.display = 'flex';
+          tempSep.style.display = '';
+          document.getElementById('stat-temp').textContent = temps.join('  ');
+        } else {
+          tempWrap.style.display = 'none';
+          tempSep.style.display = 'none';
         }
 
         document.getElementById('stat-net').textContent =
