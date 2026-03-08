@@ -49,6 +49,14 @@ Or natively with Go 1.22+:
 go build -ldflags="-s -w" -o bin/webterm.exe .
 ```
 
+## Test
+
+```
+make test
+```
+
+This cross-compiles the test binary in Docker and runs it locally on Windows.
+
 ## Tech stack
 
 - **Backend**: Go 1.22, [conpty](https://github.com/UserExistsError/conpty), [gorilla/websocket](https://github.com/gorilla/websocket)
