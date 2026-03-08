@@ -285,7 +285,7 @@ func handleWS(w http.ResponseWriter, r *http.Request, shell string) {
 				return
 			}
 			wsMu.Lock()
-			err = conn.WriteMessage(websocket.TextMessage, buf[:n])
+			err = conn.WriteMessage(websocket.BinaryMessage, buf[:n])
 			wsMu.Unlock()
 			if err != nil {
 				return

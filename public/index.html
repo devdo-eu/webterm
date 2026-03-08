@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>webterm</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5/css/xterm.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5/lib/codemirror.min.css">
   <style>
@@ -203,6 +204,10 @@
       background: #161b22; border: 1px solid #30363d;
       border-radius: 8px; padding: 32px; width: 320px;
     }
+    #login-icon {
+      width: 80px; height: 80px; margin: 0 auto 16px;
+      display: block; filter: drop-shadow(0 4px 12px rgba(88,166,255,0.2));
+    }
     #login-title {
       font-size: 24px; font-weight: 700; color: #c9d1d9;
       text-align: center; margin-bottom: 24px; letter-spacing: 1px;
@@ -244,6 +249,7 @@
 <body>
   <div id="login-overlay">
     <div id="login-card">
+      <svg id="login-icon" viewBox="0 0 128 128"><defs><linearGradient id="li-bg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#1a1e2e"/><stop offset="100%" stop-color="#0d1117"/></linearGradient><linearGradient id="li-glow" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#58a6ff"/><stop offset="100%" stop-color="#3fb950"/></linearGradient><filter id="li-tg"><feGaussianBlur in="SourceGraphic" stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><rect width="128" height="128" rx="28" fill="url(#li-bg)"/><rect width="126" height="126" x="1" y="1" rx="27" fill="none" stroke="#30363d" stroke-width="1.5"/><rect x="12" y="14" width="104" height="18" rx="5" fill="#161b22"/><circle cx="24" cy="23" r="3.5" fill="#f85149"/><circle cx="35" cy="23" r="3.5" fill="#d29922"/><circle cx="46" cy="23" r="3.5" fill="#3fb950"/><g filter="url(#li-tg)"><text x="22" y="62" font-family="Consolas,monospace" font-weight="bold" font-size="28" fill="url(#li-glow)">❯</text></g><rect x="50" y="44" width="14" height="22" rx="2" fill="#58a6ff" opacity="0.85"><animate attributeName="opacity" values="0.85;0.2;0.85" dur="1.2s" repeatCount="indefinite"/></rect><rect x="22" y="76" width="62" height="5" rx="2.5" fill="#8b949e" opacity="0.4"/><rect x="22" y="88" width="84" height="5" rx="2.5" fill="#8b949e" opacity="0.25"/><rect x="22" y="100" width="48" height="5" rx="2.5" fill="#8b949e" opacity="0.15"/></svg>
       <div id="login-title">webterm</div>
       <form id="login-form">
         <input type="text" id="login-user" placeholder="Username" autocomplete="username">

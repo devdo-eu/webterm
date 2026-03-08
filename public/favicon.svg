@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1a1e2e"/>
+      <stop offset="100%" stop-color="#0d1117"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#58a6ff"/>
+      <stop offset="100%" stop-color="#3fb950"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.5"/>
+    </filter>
+    <filter id="textglow">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <!-- Rounded rectangle background -->
+  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
+  <!-- Subtle border -->
+  <rect width="126" height="126" x="1" y="1" rx="27" fill="none" stroke="#30363d" stroke-width="1.5"/>
+  <!-- Title bar -->
+  <rect x="12" y="14" width="104" height="18" rx="5" fill="#161b22"/>
+  <!-- Window dots -->
+  <circle cx="24" cy="23" r="3.5" fill="#f85149"/>
+  <circle cx="35" cy="23" r="3.5" fill="#d29922"/>
+  <circle cx="46" cy="23" r="3.5" fill="#3fb950"/>
+  <!-- Prompt chevron > with glow -->
+  <g filter="url(#textglow)">
+    <text x="22" y="62" font-family="Consolas,monospace" font-weight="bold" font-size="28" fill="url(#glow)">❯</text>
+  </g>
+  <!-- Cursor block -->
+  <rect x="50" y="44" width="14" height="22" rx="2" fill="#58a6ff" opacity="0.85">
+    <animate attributeName="opacity" values="0.85;0.2;0.85" dur="1.2s" repeatCount="indefinite"/>
+  </rect>
+  <!-- Fake output lines -->
+  <rect x="22" y="76" width="62" height="5" rx="2.5" fill="#8b949e" opacity="0.4"/>
+  <rect x="22" y="88" width="84" height="5" rx="2.5" fill="#8b949e" opacity="0.25"/>
+  <rect x="22" y="100" width="48" height="5" rx="2.5" fill="#8b949e" opacity="0.15"/>
+</svg>
