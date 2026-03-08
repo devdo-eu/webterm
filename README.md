@@ -4,7 +4,7 @@ Web-based terminal with a file explorer sidebar. Runs on Windows using ConPTY.
 
 ## Features
 
-- **Terminal** — full PTY terminal in the browser via WebSocket + [xterm.js](https://xtermjs.org/)
+- **Terminal** — full PTY terminal in the browser via WebSocket + [xterm.js](https://xtermjs.org/), multiple tabs with independent sessions, tab names auto-update to show the running command
 - **File explorer** — sidebar with tree view (expand/collapse), git status badges (M/A/D/R/?), and current branch display
 - **File editor** — click any file to open an in-browser editor with syntax highlighting (Python, Go, HTML, Markdown, JS/TS, CSS, YAML, SQL, and more via [CodeMirror](https://codemirror.net/5/)), save (Ctrl+S), unsaved change detection, and line ending preservation
 - **Resource monitor** — status bar with CPU, RAM, GPU (NVIDIA), power draw, temperatures (CPU via WMI, GPU), and network throughput

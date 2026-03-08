@@ -252,7 +252,10 @@ func shellInit(shell string) string {
 	base := strings.ToLower(filepath.Base(shell))
 	switch {
 	case strings.Contains(base, "powershell") || strings.Contains(base, "pwsh"):
-		return "$function:__wt_op = $function:prompt\r\nfunction global:prompt { $e=[char]0x1b; $b=[char]7; [Console]::Write(\"${e}]7;$($PWD.Path)${b}\"); & $function:__wt_op }\r\ncls\r\n"
+		return "$function:__wt_op = $function:prompt\r\n" +
+			"function global:prompt { $e=[char]0x1b; $b=[char]7; [Console]::Write(\"${e}]7;$($PWD.Path)${b}\"); [Console]::Write(\"${e}]0;$($PWD.Path.Split('\\')[-1])${b}\"); & $function:__wt_op }\r\n" +
+			"Set-PSReadLineKeyHandler -Key Enter -ScriptBlock { $l=''; $c=0; [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$l,[ref]$c); if($l.Trim()){ $cmd=($l.Trim()-split '\\s+')[0]; $e=[char]0x1b; $b=[char]7; [Console]::Write(\"${e}]0;${cmd}${b}\") }; [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine() }\r\n" +
+			"cls\r\n"
 	case strings.Contains(base, "cmd"):
 		return "prompt $E]7;$P$E\\$P$G\r\ncls\r\n"
 	default:

@@ -61,8 +61,30 @@
     .git-U  { color: #8b949e; }
 
     /* --- Terminal --- */
-    #terminal-wrap { flex: 1; overflow: hidden; }
-    #terminal { height: 100%; }
+    #terminal-wrap { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+    #tab-bar {
+      display: flex; align-items: center;
+      background: #161b22; border-bottom: 1px solid #30363d;
+      height: 28px; flex-shrink: 0;
+    }
+    .tab {
+      display: flex; align-items: center;
+      padding: 0 10px; height: 28px;
+      font-size: 12px; color: #8b949e;
+      cursor: pointer; border-right: 1px solid #30363d;
+      user-select: none; white-space: nowrap;
+    }
+    .tab:hover { background: #1c2128; }
+    .tab.active { background: #0d1117; color: #c9d1d9; }
+    .tab-close { margin-left: 8px; font-size: 14px; line-height: 1; color: #484f58; }
+    .tab-close:hover { color: #f85149; }
+    #tab-add {
+      background: none; border: none; color: #484f58;
+      font-size: 16px; cursor: pointer; padding: 0 10px; height: 28px;
+    }
+    #tab-add:hover { color: #c9d1d9; }
+    #terminals { flex: 1; overflow: hidden; }
+    .term-container { height: 100%; }
 
     /* --- Status bar --- */
     #status-bar {
@@ -179,7 +201,8 @@
       <div id="file-list"></div>
     </div>
     <div id="terminal-wrap">
-      <div id="terminal"></div>
+      <div id="tab-bar"></div>
+      <div id="terminals"></div>
     </div>
     <div id="editor-wrap">
       <div id="editor-header">
@@ -251,37 +274,111 @@
   <script src="https://cdn.jsdelivr.net/npm/codemirror@5/mode/dockerfile/dockerfile.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/codemirror@5/mode/clike/clike.min.js"></script>
   <script>
-    // ---- Terminal ----
-    const term = new Terminal({
-      cursorBlink: true,
-      fontSize: 14,
-      theme: { background: "#0d1117" },
-    });
-    const fitAddon = new FitAddon.FitAddon();
-    term.loadAddon(fitAddon);
-    term.open(document.getElementById("terminal"));
-    fitAddon.fit();
+    // ---- Terminal tabs ----
+    const tabs = [];
+    let activeTabId = null;
+    let nextTabId = 1;
 
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${proto}//${location.host}/ws`);
-    ws.binaryType = "arraybuffer";
+    function getActiveTab() { return tabs.find(t => t.id === activeTabId); }
 
-    ws.onopen = () => {
-      ws.send("\x01" + JSON.stringify({ cols: term.cols, rows: term.rows }));
-    };
-    ws.onmessage = (e) => {
-      const data = typeof e.data === "string" ? e.data : new Uint8Array(e.data);
-      term.write(data);
-    };
-    ws.onclose = () => term.write("\r\n\x1b[31m[connection closed]\x1b[0m\r\n");
+    function createTab() {
+      const id = nextTabId++;
+      const container = document.createElement('div');
+      container.className = 'term-container';
+      container.style.display = 'none';
+      document.getElementById('terminals').appendChild(container);
 
-    term.onData((data) => ws.send(data));
-    term.onResize(({ cols, rows }) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send("\x01" + JSON.stringify({ cols, rows }));
+      const t = new Terminal({ cursorBlink: true, fontSize: 14, theme: { background: '#0d1117' } });
+      const fit = new FitAddon.FitAddon();
+      t.loadAddon(fit);
+      t.open(container);
+
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const socket = new WebSocket(`${proto}//${location.host}/ws`);
+      socket.binaryType = 'arraybuffer';
+
+      socket.onopen = () => {
+        socket.send('\x01' + JSON.stringify({ cols: t.cols, rows: t.rows }));
+      };
+      socket.onmessage = (e) => {
+        const data = typeof e.data === 'string' ? e.data : new Uint8Array(e.data);
+        t.write(data);
+      };
+      socket.onclose = () => t.write('\r\n\x1b[31m[connection closed]\x1b[0m\r\n');
+
+      t.onData((data) => { if (socket.readyState === WebSocket.OPEN) socket.send(data); });
+      t.onResize(({ cols, rows }) => {
+        if (socket.readyState === WebSocket.OPEN)
+          socket.send('\x01' + JSON.stringify({ cols, rows }));
+      });
+
+      t.parser.registerOscHandler(7, (data) => {
+        let path = data;
+        if (path.startsWith('file://')) {
+          try { path = decodeURIComponent(new URL(path).pathname); } catch(e) { return true; }
+          if (/^\/[A-Za-z]:/.test(path)) path = path.slice(1);
+        }
+        tab.cwd = path;
+        if (activeTabId === id && path && !samePath(path, currentPath)) loadRoot(path);
+        return true;
+      });
+
+      t.onTitleChange((title) => { tab.title = title; renderTabBar(); });
+
+      const tab = { id, term: t, fitAddon: fit, ws: socket, container, cwd: null, title: '' };
+      tabs.push(tab);
+      renderTabBar();
+      switchTab(id);
+      return tab;
+    }
+
+    function switchTab(id) {
+      activeTabId = id;
+      tabs.forEach(t => { t.container.style.display = t.id === id ? '' : 'none'; });
+      const tab = getActiveTab();
+      if (tab) {
+        tab.fitAddon.fit();
+        tab.term.focus();
+        if (tab.cwd && !samePath(tab.cwd, currentPath)) loadRoot(tab.cwd);
       }
+      renderTabBar();
+    }
+
+    function closeTab(id) {
+      if (tabs.length <= 1) return;
+      const idx = tabs.findIndex(t => t.id === id);
+      if (idx === -1) return;
+      const tab = tabs[idx];
+      tab.ws.close();
+      tab.term.dispose();
+      tab.container.remove();
+      tabs.splice(idx, 1);
+      if (activeTabId === id) switchTab(tabs[Math.min(idx, tabs.length - 1)].id);
+      else renderTabBar();
+    }
+
+    function renderTabBar() {
+      const bar = document.getElementById('tab-bar');
+      bar.innerHTML = tabs.map((t, i) => {
+        let label = t.title || 'Terminal ' + (i + 1);
+        if (label.length > 24) label = label.slice(0, 24) + '\u2026';
+        return `<div class="tab${t.id === activeTabId ? ' active' : ''}" data-tab-id="${t.id}">` +
+          `${esc(label)}` +
+          (tabs.length > 1 ? `<span class="tab-close" data-tab-id="${t.id}">&times;</span>` : '') +
+          `</div>`;
+      }).join('') + `<button id="tab-add" title="Nowy terminal">+</button>`;
+    }
+
+    document.getElementById('tab-bar').addEventListener('click', (e) => {
+      if (e.target.id === 'tab-add') { createTab(); return; }
+      const cl = e.target.closest('.tab-close');
+      if (cl) { closeTab(parseInt(cl.dataset.tabId)); return; }
+      const tb = e.target.closest('.tab');
+      if (tb) switchTab(parseInt(tb.dataset.tabId));
     });
-    window.addEventListener("resize", () => fitAddon.fit());
+
+    window.addEventListener('resize', () => { const t = getActiveTab(); if (t) t.fitAddon.fit(); });
+    createTab();
 
     // ---- File panel (tree view) ----
     let currentPath = "";
@@ -392,19 +489,6 @@
       if (!entry) return;
       if (entry.dataset.dir !== undefined) toggleDir(entry.dataset.dir);
       else if (entry.dataset.file !== undefined) openFile(entry.dataset.file);
-    });
-
-    // CWD tracking via OSC 7 — sync file panel with terminal directory
-    term.parser.registerOscHandler(7, (data) => {
-      let path = data;
-      if (path.startsWith('file://')) {
-        try { path = decodeURIComponent(new URL(path).pathname); } catch(e) { return true; }
-        if (/^\/[A-Za-z]:/.test(path)) path = path.slice(1);
-      }
-      if (path && !samePath(path, currentPath)) {
-        loadRoot(path);
-      }
-      return true;
     });
 
     // ---- File editor (CodeMirror) ----
@@ -526,8 +610,8 @@
       editorFilePath = null;
       document.getElementById('editor-wrap').style.display = 'none';
       document.getElementById('terminal-wrap').style.display = '';
-      fitAddon.fit();
-      term.focus();
+      const at = getActiveTab();
+      if (at) { at.fitAddon.fit(); at.term.focus(); }
       renderTree();
     }
 
