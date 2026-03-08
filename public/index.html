@@ -101,6 +101,38 @@
       margin: 0 4px;
     }
 
+    /* --- Editor --- */
+    #editor-wrap {
+      flex: 1; display: none; flex-direction: column; overflow: hidden;
+    }
+    #editor-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 12px; height: 36px;
+      background: #161b22; border-bottom: 1px solid #30363d; flex-shrink: 0;
+    }
+    #editor-title { display: flex; align-items: center; overflow: hidden; min-width: 0; }
+    #editor-filename {
+      font-size: 13px; color: #c9d1d9;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    #editor-modified { color: #d29922; margin-left: 6px; display: none; font-size: 16px; }
+    #editor-status { font-size: 11px; color: #3fb950; margin-left: 8px; opacity: 0; transition: opacity 0.3s; }
+    .editor-btn {
+      background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+      padding: 3px 12px; font-size: 12px; cursor: pointer;
+      border-radius: 4px; font-family: inherit; margin-left: 6px;
+    }
+    .editor-btn:hover { background: #30363d; }
+    .editor-btn-save { color: #3fb950; }
+    #editor-content {
+      flex: 1; background: #0d1117; color: #c9d1d9;
+      border: none; outline: none; resize: none;
+      padding: 8px 12px;
+      font-family: Consolas, 'Courier New', monospace;
+      font-size: 14px; line-height: 1.5; tab-size: 4;
+    }
+    .file-entry.active { background: #1c2128; }
+
     /* scrollbar */
     #file-list::-webkit-scrollbar { width: 6px; }
     #file-list::-webkit-scrollbar-track { background: transparent; }
@@ -119,6 +151,20 @@
     </div>
     <div id="terminal-wrap">
       <div id="terminal"></div>
+    </div>
+    <div id="editor-wrap">
+      <div id="editor-header">
+        <div id="editor-title">
+          <span id="editor-filename"></span>
+          <span id="editor-modified">●</span>
+          <span id="editor-status"></span>
+        </div>
+        <div>
+          <button class="editor-btn editor-btn-save" id="editor-save" title="Ctrl+S">Save</button>
+          <button class="editor-btn" id="editor-close">Close</button>
+        </div>
+      </div>
+      <textarea id="editor-content" spellcheck="false"></textarea>
     </div>
     </div>
     <div id="status-bar">
@@ -186,6 +232,10 @@
     let currentPath = "";
     let expandedDirs = new Set();
     let dirCache = {};
+    let editorFilePath = null;
+    let editorOriginal = '';
+    let editorModified = false;
+    let editorLineEnding = '\n';
 
     function samePath(a, b) {
       const norm = p => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
@@ -268,8 +318,9 @@
         const fullPath = parentPath + sep + f.name;
         const expanded = f.isDir && expandedDirs.has(fullPath);
         const dirCls = f.isDir ? " is-dir" : "";
+        const activeCls = !f.isDir && editorFilePath && samePath(fullPath, editorFilePath) ? " active" : "";
         const icon = f.isDir ? (expanded ? "\u25BE" : "\u25B8") : "\u00B7";
-        html += `<div class="file-entry${dirCls}" ${f.isDir ? `data-dir="${esc(fullPath)}"` : `data-file="${esc(fullPath)}"`} style="padding-left:${pad}px">
+        html += `<div class="file-entry${dirCls}${activeCls}" ${f.isDir ? `data-dir="${esc(fullPath)}"` : `data-file="${esc(fullPath)}"`} style="padding-left:${pad}px">
           <span class="file-icon">${icon}</span>
           <span class="file-name">${esc(f.name)}</span>
           ${gitBadge(f.git)}
@@ -283,8 +334,9 @@
 
     document.getElementById("file-list").addEventListener("click", (e) => {
       const entry = e.target.closest(".file-entry");
-      if (!entry || entry.dataset.dir === undefined) return;
-      toggleDir(entry.dataset.dir);
+      if (!entry) return;
+      if (entry.dataset.dir !== undefined) toggleDir(entry.dataset.dir);
+      else if (entry.dataset.file !== undefined) openFile(entry.dataset.file);
     });
 
     // CWD tracking via OSC 7 — sync file panel with terminal directory
@@ -298,6 +350,99 @@
         loadRoot(path);
       }
       return true;
+    });
+
+    // ---- File editor ----
+    function isEditorModified() {
+      return document.getElementById('editor-content').value !== editorOriginal.replace(/\r\n/g, '\n');
+    }
+
+    async function openFile(path) {
+      if (editorFilePath && isEditorModified()) {
+        if (!confirm('You have unsaved changes. Discard?')) return;
+      }
+      try {
+        const resp = await fetch('/api/file?path=' + encodeURIComponent(path));
+        const data = await resp.json();
+        if (data.error) { alert(data.error); return; }
+        editorFilePath = data.path;
+        editorOriginal = data.content;
+        editorLineEnding = data.content.includes('\r\n') ? '\r\n' : '\n';
+        document.getElementById('editor-filename').textContent = data.path.split(/[/\\]/).pop();
+        document.getElementById('editor-filename').title = data.path;
+        document.getElementById('editor-content').value = data.content;
+        document.getElementById('editor-modified').style.display = 'none';
+        document.getElementById('editor-status').style.opacity = '0';
+        editorModified = false;
+        document.getElementById('terminal-wrap').style.display = 'none';
+        document.getElementById('editor-wrap').style.display = 'flex';
+        renderTree();
+      } catch(e) {
+        alert('Read error:' + e.message);
+      }
+    }
+
+    async function saveFile() {
+      if (!editorFilePath) return;
+      let content = document.getElementById('editor-content').value;
+      if (editorLineEnding === '\r\n') content = content.replace(/\n/g, '\r\n');
+      try {
+        const resp = await fetch('/api/file?path=' + encodeURIComponent(editorFilePath), {
+          method: 'PUT',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({content})
+        });
+        const data = await resp.json();
+        if (data.error) { alert('Save error: ' + data.error); return; }
+        editorOriginal = content;
+        editorModified = false;
+        document.getElementById('editor-modified').style.display = 'none';
+        const st = document.getElementById('editor-status');
+        st.textContent = 'Saved';
+        st.style.opacity = '1';
+        setTimeout(() => { st.style.opacity = '0'; }, 2000);
+      } catch(e) {
+        alert('Save error: ' + e.message);
+      }
+    }
+
+    function closeEditor() {
+      if (isEditorModified() && !confirm('You have unsaved changes. Close?')) return;
+      editorFilePath = null;
+      document.getElementById('editor-wrap').style.display = 'none';
+      document.getElementById('terminal-wrap').style.display = '';
+      fitAddon.fit();
+      term.focus();
+      renderTree();
+    }
+
+    document.getElementById('editor-content').addEventListener('input', () => {
+      const mod = isEditorModified();
+      if (mod !== editorModified) {
+        editorModified = mod;
+        document.getElementById('editor-modified').style.display = mod ? 'inline' : 'none';
+      }
+    });
+
+    document.getElementById('editor-content').addEventListener('keydown', (e) => {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const ta = e.target;
+        const start = ta.selectionStart, end = ta.selectionEnd;
+        ta.value = ta.value.substring(0, start) + '\t' + ta.value.substring(end);
+        ta.selectionStart = ta.selectionEnd = start + 1;
+        ta.dispatchEvent(new Event('input'));
+      }
+    });
+
+    document.getElementById('editor-save').addEventListener('click', saveFile);
+    document.getElementById('editor-close').addEventListener('click', closeEditor);
+
+    document.addEventListener('keydown', (e) => {
+      if (e.ctrlKey && e.key === 's' && editorFilePath) {
+        e.preventDefault();
+        saveFile();
+      }
     });
 
     // ---- Resource monitor ----

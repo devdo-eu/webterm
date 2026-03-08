@@ -186,6 +186,66 @@ func getGitStatuses(dir string) map[string]string {
 	return statuses
 }
 
+// --- File editor API ---
+
+func handleFile(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	filePath := r.URL.Query().Get("path")
+	if filePath == "" {
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(map[string]string{"error": "path required"})
+		return
+	}
+	filePath = filepath.Clean(filePath)
+
+	switch r.Method {
+	case "GET":
+		info, err := os.Stat(filePath)
+		if err != nil {
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		if info.IsDir() {
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(map[string]string{"error": "is a directory"})
+			return
+		}
+		if info.Size() > 5<<20 {
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(map[string]string{"error": "file too large (max 5 MB)"})
+			return
+		}
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{"path": filePath, "content": string(content)})
+
+	case "PUT":
+		var body struct {
+			Content string `json:"content"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		if err := os.WriteFile(filePath, []byte(body.Content), 0644); err != nil {
+			w.WriteHeader(500)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{"ok": "true"})
+
+	default:
+		w.WriteHeader(405)
+		json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+	}
+}
+
 // --- Shell integration (OSC 7 CWD reporting) ---
 
 func shellInit(shell string) string {
@@ -472,6 +532,7 @@ func main() {
 	publicFS, _ := fs.Sub(staticFiles, "public")
 	http.Handle("/", http.FileServer(http.FS(publicFS)))
 	http.HandleFunc("/api/files", handleFiles)
+	http.HandleFunc("/api/file", handleFile)
 	http.HandleFunc("/api/stats", handleStats)
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		handleWS(w, r, cfg.Shell)
