@@ -1,0 +1,7 @@
+
+.claude/
+bin/
+webterm.exe
+dev_log/
+CLAUDE.md
+*.syso

@@ -9,7 +9,14 @@ services:
       - CGO_ENABLED=0
       - GOOS=windows
       - GOARCH=amd64
-    command: sh -c "go mod tidy && mkdir -p bin && go build -ldflags='-s -w' -o bin/webterm.exe ."
+    command: >-
+      sh -c "apk add --no-cache rsvg-convert &&
+      rsvg-convert -w 256 -h 256 public/favicon.svg > /tmp/icon.png &&
+      GOOS=linux GOARCH=amd64 go install github.com/tc-hib/go-winres@latest &&
+      go-winres simply --icon /tmp/icon.png --arch amd64 &&
+      go mod tidy && mkdir -p bin &&
+      go build -ldflags='-s -w' -o bin/webterm.exe . &&
+      rm -f rsrc_windows_*.syso"
 
   test:
     image: golang:1.22-alpine

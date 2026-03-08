@@ -95,4 +95,4 @@ Browser ──WebSocket──► Go server ──ConPTY──► powershell / cm
 
 ## License
 
-MIT
+[MIT](LICENSE)
