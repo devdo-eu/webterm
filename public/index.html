@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>webterm</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5/css/xterm.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5/lib/codemirror.min.css">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { height: 100%; background: #0d1117; overflow: hidden; font-family: Consolas, 'Courier New', monospace; color: #c9d1d9; }
@@ -120,17 +121,45 @@
     .editor-btn {
       background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
       padding: 3px 12px; font-size: 12px; cursor: pointer;
-      border-radius: 4px; font-family: inherit; margin-left: 6px;
+      border-radius: 4px; font-family: inherit; margin-right: 6px;
     }
     .editor-btn:hover { background: #30363d; }
     .editor-btn-save { color: #3fb950; }
-    #editor-content {
-      flex: 1; background: #0d1117; color: #c9d1d9;
-      border: none; outline: none; resize: none;
-      padding: 8px 12px;
+    #editor-cm { flex: 1; overflow: hidden; }
+    #editor-cm .CodeMirror {
+      height: 100%; background: #0d1117; color: #c9d1d9;
       font-family: Consolas, 'Courier New', monospace;
-      font-size: 14px; line-height: 1.5; tab-size: 4;
+      font-size: 14px; line-height: 1.5;
     }
+    #editor-cm .CodeMirror-gutters { background: #0d1117; border-right: 1px solid #21262d; }
+    #editor-cm .CodeMirror-linenumber { color: #484f58; }
+    #editor-cm .CodeMirror-cursor { border-left-color: #c9d1d9; }
+    #editor-cm .CodeMirror-selected { background: #264f78; }
+    #editor-cm .CodeMirror-focused .CodeMirror-selected { background: #264f78; }
+    #editor-cm .CodeMirror-activeline-background { background: #161b22; }
+    #editor-cm .CodeMirror-matchingbracket { color: #79c0ff !important; outline: 1px solid #3fb950; }
+    /* syntax colors — GitHub Dark inspired */
+    .cm-s-default .cm-keyword { color: #ff7b72; }
+    .cm-s-default .cm-def { color: #d2a8ff; }
+    .cm-s-default .cm-variable { color: #c9d1d9; }
+    .cm-s-default .cm-variable-2 { color: #79c0ff; }
+    .cm-s-default .cm-variable-3, .cm-s-default .cm-type { color: #ffa657; }
+    .cm-s-default .cm-property { color: #79c0ff; }
+    .cm-s-default .cm-operator { color: #ff7b72; }
+    .cm-s-default .cm-number { color: #79c0ff; }
+    .cm-s-default .cm-string, .cm-s-default .cm-string-2 { color: #a5d6ff; }
+    .cm-s-default .cm-comment { color: #8b949e; }
+    .cm-s-default .cm-atom { color: #79c0ff; }
+    .cm-s-default .cm-meta { color: #79c0ff; }
+    .cm-s-default .cm-tag { color: #7ee787; }
+    .cm-s-default .cm-attribute { color: #79c0ff; }
+    .cm-s-default .cm-qualifier { color: #d2a8ff; }
+    .cm-s-default .cm-builtin { color: #ffa657; }
+    .cm-s-default .cm-bracket { color: #c9d1d9; }
+    .cm-s-default .cm-link { color: #a5d6ff; text-decoration: underline; }
+    .cm-s-default .cm-header { color: #79c0ff; font-weight: bold; }
+    .cm-s-default .cm-hr { color: #30363d; }
+    .cm-s-default .cm-error { color: #f85149; }
     .file-entry.active { background: #1c2128; }
 
     /* scrollbar */
@@ -154,17 +183,17 @@
     </div>
     <div id="editor-wrap">
       <div id="editor-header">
+        <div>
+          <button class="editor-btn" id="editor-close">Close</button>
+          <button class="editor-btn editor-btn-save" id="editor-save" title="Ctrl+S">Save</button>
+        </div>
         <div id="editor-title">
           <span id="editor-filename"></span>
           <span id="editor-modified">●</span>
           <span id="editor-status"></span>
         </div>
-        <div>
-          <button class="editor-btn editor-btn-save" id="editor-save" title="Ctrl+S">Save</button>
-          <button class="editor-btn" id="editor-close">Close</button>
-        </div>
       </div>
-      <textarea id="editor-content" spellcheck="false"></textarea>
+      <div id="editor-cm"></div>
     </div>
     </div>
     <div id="status-bar">
@@ -195,6 +224,22 @@
 
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0/lib/addon-fit.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5/lib/codemirror.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5/addon/edit/matchbrackets.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5/addon/selection/active-line.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5/mode/xml/xml.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5/mode/javascript/javascript.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5/mode/css/css.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5/mode/htmlmixed/htmlmixed.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5/mode/python/python.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5/mode/go/go.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5/mode/markdown/markdown.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5/mode/shell/shell.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5/mode/yaml/yaml.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5/mode/toml/toml.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5/mode/sql/sql.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5/mode/dockerfile/dockerfile.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/codemirror@5/mode/clike/clike.min.js"></script>
   <script>
     // ---- Terminal ----
     const term = new Terminal({
@@ -352,10 +397,66 @@
       return true;
     });
 
-    // ---- File editor ----
-    function isEditorModified() {
-      return document.getElementById('editor-content').value !== editorOriginal.replace(/\r\n/g, '\n');
+    // ---- File editor (CodeMirror) ----
+    const extModeMap = {
+      py: 'python', pyw: 'python',
+      go: 'go',
+      html: 'htmlmixed', htm: 'htmlmixed',
+      md: 'markdown', markdown: 'markdown',
+      js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
+      ts: {name: 'javascript', typescript: true}, tsx: {name: 'javascript', typescript: true},
+      json: {name: 'javascript', json: true},
+      css: 'css', scss: 'text/x-scss', less: 'text/x-less',
+      xml: 'xml', svg: 'xml', xsl: 'xml',
+      sh: 'shell', bash: 'shell', zsh: 'shell',
+      bat: 'shell', cmd: 'shell', ps1: 'shell',
+      yaml: 'yaml', yml: 'yaml',
+      toml: 'toml', ini: 'toml',
+      sql: 'sql',
+      dockerfile: 'dockerfile',
+      c: 'text/x-csrc', h: 'text/x-csrc',
+      cpp: 'text/x-c++src', cxx: 'text/x-c++src', hpp: 'text/x-c++hdr',
+      cs: 'text/x-csharp',
+      java: 'text/x-java',
+      rs: 'text/x-rustsrc',
+    };
+    const nameMode = { 'Dockerfile': 'dockerfile', 'Makefile': 'shell' };
+
+    function getMode(filepath) {
+      const name = filepath.split(/[/\\]/).pop();
+      if (nameMode[name]) return nameMode[name];
+      const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
+      return extModeMap[ext] || null;
     }
+
+    const cm = CodeMirror(document.getElementById('editor-cm'), {
+      lineNumbers: true,
+      matchBrackets: true,
+      styleActiveLine: true,
+      indentWithTabs: false,
+      tabSize: 4,
+      indentUnit: 4,
+      lineWrapping: false,
+      extraKeys: {
+        'Ctrl-S': () => saveFile(),
+        'Tab': (cm) => {
+          if (cm.somethingSelected()) cm.indentSelection('add');
+          else cm.replaceSelection('    ', 'end');
+        },
+      }
+    });
+
+    function isEditorModified() {
+      return cm.getValue() !== editorOriginal.replace(/\r\n/g, '\n');
+    }
+
+    cm.on('change', () => {
+      const mod = isEditorModified();
+      if (mod !== editorModified) {
+        editorModified = mod;
+        document.getElementById('editor-modified').style.display = mod ? 'inline' : 'none';
+      }
+    });
 
     async function openFile(path) {
       if (editorFilePath && isEditorModified()) {
@@ -370,12 +471,16 @@
         editorLineEnding = data.content.includes('\r\n') ? '\r\n' : '\n';
         document.getElementById('editor-filename').textContent = data.path.split(/[/\\]/).pop();
         document.getElementById('editor-filename').title = data.path;
-        document.getElementById('editor-content').value = data.content;
+        cm.setValue(data.content.replace(/\r\n/g, '\n'));
+        cm.setOption('mode', getMode(data.path));
+        cm.clearHistory();
         document.getElementById('editor-modified').style.display = 'none';
         document.getElementById('editor-status').style.opacity = '0';
         editorModified = false;
         document.getElementById('terminal-wrap').style.display = 'none';
         document.getElementById('editor-wrap').style.display = 'flex';
+        cm.refresh();
+        cm.focus();
         renderTree();
       } catch(e) {
         alert('Read error:' + e.message);
@@ -384,7 +489,7 @@
 
     async function saveFile() {
       if (!editorFilePath) return;
-      let content = document.getElementById('editor-content').value;
+      let content = cm.getValue();
       if (editorLineEnding === '\r\n') content = content.replace(/\n/g, '\r\n');
       try {
         const resp = await fetch('/api/file?path=' + encodeURIComponent(editorFilePath), {
@@ -415,25 +520,6 @@
       term.focus();
       renderTree();
     }
-
-    document.getElementById('editor-content').addEventListener('input', () => {
-      const mod = isEditorModified();
-      if (mod !== editorModified) {
-        editorModified = mod;
-        document.getElementById('editor-modified').style.display = mod ? 'inline' : 'none';
-      }
-    });
-
-    document.getElementById('editor-content').addEventListener('keydown', (e) => {
-      if (e.key === 'Tab') {
-        e.preventDefault();
-        const ta = e.target;
-        const start = ta.selectionStart, end = ta.selectionEnd;
-        ta.value = ta.value.substring(0, start) + '\t' + ta.value.substring(end);
-        ta.selectionStart = ta.selectionEnd = start + 1;
-        ta.dispatchEvent(new Event('input'));
-      }
-    });
 
     document.getElementById('editor-save').addEventListener('click', saveFile);
     document.getElementById('editor-close').addEventListener('click', closeEditor);
