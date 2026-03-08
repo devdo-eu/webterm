@@ -2,14 +2,22 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"flag"
 	"fmt"
 	"io/fs"
 	"log"
+	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -34,10 +42,15 @@ var upgrader = websocket.Upgrader{
 }
 
 var (
-	flagPort  = flag.String("port", "1122", "listen port")
-	flagShell = flag.String("shell", "powershell.exe", "shell executable")
-	flagStats = flag.Int("stats", 2000, "resource monitor refresh interval in milliseconds")
+	flagPort    = flag.String("port", "1122", "listen port")
+	flagShell   = flag.String("shell", "powershell.exe", "shell executable")
+	flagStats   = flag.Int("stats", 2000, "resource monitor refresh interval in milliseconds")
+	flagTLS     = flag.Bool("tls", false, "enable TLS with auto-generated self-signed certificate")
+	flagTLSCert = flag.String("tls-cert", "", "path to TLS certificate file")
+	flagTLSKey  = flag.String("tls-key", "", "path to TLS private key file")
 )
+
+var tlsEnabled bool
 
 // --- File explorer API ---
 
@@ -689,6 +702,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   tlsEnabled,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   86400,
 	})
@@ -696,11 +710,79 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
+// --- TLS ---
+
+func localIPs() []net.IP {
+	ips := []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback}
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ips
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			if ipNet, ok := addr.(*net.IPNet); ok {
+				ips = append(ips, ipNet.IP)
+			}
+		}
+	}
+	return ips
+}
+
+func generateSelfSignedCert() (tls.Certificate, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	ips := localIPs()
+	hostname, _ := os.Hostname()
+	dnsNames := []string{"localhost"}
+	if hostname != "" {
+		dnsNames = append(dnsNames, hostname)
+	}
+	tmpl := x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{Organization: []string{"webterm"}},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     dnsNames,
+		IPAddresses:  ips,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	return tls.X509KeyPair(certPEM, keyPEM)
+}
+
 // --- Main ---
 
 func main() {
 	flag.Parse()
 	go statsCollector(time.Duration(*flagStats) * time.Millisecond)
+
+	if (*flagTLSCert == "") != (*flagTLSKey == "") {
+		log.Fatal("-tls-cert and -tls-key must be used together")
+	}
+	tlsEnabled = *flagTLS || *flagTLSCert != ""
 
 	publicFS, _ := fs.Sub(staticFiles, "public")
 	http.Handle("/", http.FileServer(http.FS(publicFS)))
@@ -714,6 +796,40 @@ func main() {
 	}))
 
 	addr := fmt.Sprintf("0.0.0.0:%s", *flagPort)
-	log.Printf("webterm listening on http://%s/", addr)
-	log.Fatal(http.ListenAndServe(addr, nil))
+
+	if tlsEnabled {
+		if *flagTLSCert != "" && *flagTLSKey != "" {
+			srv := &http.Server{
+				Addr:         addr,
+				TLSConfig:    &tls.Config{MinVersion: tls.VersionTLS12},
+				TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
+			}
+			log.Printf("webterm listening on https://%s/", addr)
+			log.Fatal(srv.ListenAndServeTLS(*flagTLSCert, *flagTLSKey))
+		} else {
+			cert, err := generateSelfSignedCert()
+			if err != nil {
+				log.Fatalf("failed to generate self-signed certificate: %v", err)
+			}
+			parsed, _ := x509.ParseCertificate(cert.Certificate[0])
+			var sans []string
+			for _, ip := range parsed.IPAddresses {
+				sans = append(sans, ip.String())
+			}
+			log.Printf("self-signed cert SANs: DNS=%v IP=%v", parsed.DNSNames, sans)
+			log.Printf("webterm listening on https://%s/ (self-signed certificate)", addr)
+			srv := &http.Server{
+				Addr: addr,
+				TLSConfig: &tls.Config{
+					Certificates: []tls.Certificate{cert},
+					MinVersion:   tls.VersionTLS12,
+				},
+				TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
+			}
+			log.Fatal(srv.ListenAndServeTLS("", ""))
+		}
+	} else {
+		log.Printf("webterm listening on http://%s/", addr)
+		log.Fatal(http.ListenAndServe(addr, nil))
+	}
 }

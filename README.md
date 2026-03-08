@@ -25,6 +25,14 @@ webterm.exe
 
 Open `http://localhost:1122` in a browser.
 
+With TLS:
+
+```
+webterm.exe -tls
+```
+
+Open `https://localhost:1122/` (accept the self-signed certificate warning).
+
 ## Configuration
 
 ```
@@ -36,6 +44,9 @@ webterm.exe -port 8080 -shell cmd.exe -stats 5000
 | `-port` | `1122` | Listen port |
 | `-shell` | `powershell.exe` | Shell executable |
 | `-stats` | `2000` | Resource monitor refresh interval (ms) |
+| `-tls` | `false` | Enable TLS with auto-generated self-signed certificate |
+| `-tls-cert` | | Path to TLS certificate file (use with `-tls-key`) |
+| `-tls-key` | | Path to TLS private key file (use with `-tls-cert`) |
 
 ## Build
 
