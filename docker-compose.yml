@@ -1,0 +1,15 @@
+services:
+  build:
+    image: golang:1.22-alpine
+    working_dir: /src
+    volumes:
+      - .:/src
+      - go-cache:/go/pkg/mod
+    environment:
+      - CGO_ENABLED=0
+      - GOOS=windows
+      - GOARCH=amd64
+    command: sh -c "go mod tidy && go build -ldflags='-s -w' -o webterm.exe ."
+
+volumes:
+  go-cache:
