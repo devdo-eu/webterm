@@ -28,7 +28,13 @@ shell = powershell.exe
 
 ## Build
 
-Using Docker (cross-compile from Linux/macOS):
+Using Make:
+
+```
+make build
+```
+
+Or directly with Docker Compose:
 
 ```
 docker compose run --rm build
@@ -37,7 +43,7 @@ docker compose run --rm build
 Or natively with Go 1.22+:
 
 ```
-go build -ldflags="-s -w" -o webterm.exe .
+go build -ldflags="-s -w" -o bin/webterm.exe .
 ```
 
 ## Tech stack

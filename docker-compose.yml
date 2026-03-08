@@ -9,7 +9,7 @@ services:
       - CGO_ENABLED=0
       - GOOS=windows
       - GOARCH=amd64
-    command: sh -c "go mod tidy && go build -ldflags='-s -w' -o webterm.exe ."
+    command: sh -c "go mod tidy && mkdir -p bin && go build -ldflags='-s -w' -o bin/webterm.exe ."
 
 volumes:
   go-cache:
