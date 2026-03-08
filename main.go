@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"embed"
 	"encoding/hex"
@@ -276,23 +277,42 @@ func handleWS(w http.ResponseWriter, r *http.Request, shell string) {
 
 	var wsMu sync.Mutex
 
+	// Monitor process exit
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	go func() {
-		buf := make([]byte, 4096)
+		exitCode, err := cpty.Wait(ctx)
+		if err == nil {
+			log.Printf("shell exited: code=%d", exitCode)
+		}
+	}()
+
+	// ConPTY → WebSocket
+	go func() {
+		buf := make([]byte, 16384)
 		for {
 			n, err := cpty.Read(buf)
-			if err != nil {
-				conn.Close()
-				return
+			if n > 0 {
+				wsMu.Lock()
+				werr := conn.WriteMessage(websocket.BinaryMessage, buf[:n])
+				wsMu.Unlock()
+				if werr != nil {
+					return
+				}
 			}
-			wsMu.Lock()
-			err = conn.WriteMessage(websocket.BinaryMessage, buf[:n])
-			wsMu.Unlock()
 			if err != nil {
+				log.Printf("pty read: %v", err)
+				wsMu.Lock()
+				conn.WriteMessage(websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.CloseNormalClosure, "terminal exited"))
+				wsMu.Unlock()
+				conn.Close()
 				return
 			}
 		}
 	}()
 
+	// WebSocket → ConPTY
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
@@ -301,11 +321,16 @@ func handleWS(w http.ResponseWriter, r *http.Request, shell string) {
 		if len(msg) > 0 && msg[0] == 0x01 {
 			var rm resizeMsg
 			if json.Unmarshal(msg[1:], &rm) == nil {
-				cpty.Resize(rm.Cols, rm.Rows)
+				if err := cpty.Resize(rm.Cols, rm.Rows); err != nil {
+					log.Printf("pty resize: %v", err)
+				}
 			}
 			continue
 		}
-		cpty.Write(msg)
+		if _, err := cpty.Write(msg); err != nil {
+			log.Printf("pty write: %v", err)
+			break
+		}
 	}
 }
 

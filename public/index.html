@@ -373,7 +373,10 @@
         const data = typeof e.data === 'string' ? e.data : new Uint8Array(e.data);
         t.write(data);
       };
-      socket.onclose = () => t.write('\r\n\x1b[31m[connection closed]\x1b[0m\r\n');
+      socket.onclose = (e) => {
+        const reason = e.reason || 'connection closed';
+        t.write(`\r\n\x1b[31m[${reason}]\x1b[0m\r\n`);
+      };
 
       t.onData((data) => { if (socket.readyState === WebSocket.OPEN) socket.send(data); });
       t.onResize(({ cols, rows }) => {
@@ -529,6 +532,20 @@
       }
     }
 
+    async function refreshExplorer() {
+      if (!currentPath) return;
+      try {
+        const data = await fetchDir(currentPath);
+        if (!data) return;
+        document.getElementById("sidebar-branch").textContent =
+          data.gitBranch ? "\u2387 " + data.gitBranch : "";
+        for (const p of expandedDirs) {
+          await fetchDir(p);
+        }
+        renderTree();
+      } catch(e) {}
+    }
+
     function renderTree() {
       const list = document.getElementById("file-list");
       const root = dirCache[currentPath];
@@ -616,7 +633,7 @@
     });
 
     function isEditorModified() {
-      return cm.getValue() !== editorOriginal.replace(/\r\n/g, '\n');
+      return cm.getValue() !== editorOriginal;
     }
 
     cm.on('change', () => {
@@ -636,11 +653,11 @@
         const data = await resp.json();
         if (data.error) { alert(data.error); return; }
         editorFilePath = data.path;
-        editorOriginal = data.content;
         editorLineEnding = data.content.includes('\r\n') ? '\r\n' : '\n';
+        editorOriginal = data.content.replace(/\r\n?/g, '\n');
         document.getElementById('editor-filename').textContent = data.path.split(/[/\\]/).pop();
         document.getElementById('editor-filename').title = data.path;
-        cm.setValue(data.content.replace(/\r\n/g, '\n'));
+        cm.setValue(editorOriginal);
         cm.setOption('mode', getMode(data.path));
         cm.clearHistory();
         document.getElementById('editor-modified').style.display = 'none';
@@ -668,7 +685,7 @@
         });
         const data = await resp.json();
         if (data.error) { alert('Save error: ' + data.error); return; }
-        editorOriginal = content;
+        editorOriginal = cm.getValue();
         editorModified = false;
         document.getElementById('editor-modified').style.display = 'none';
         const st = document.getElementById('editor-status');
@@ -769,6 +786,7 @@
       createTab();
       await updateStats();
       setInterval(updateStats, statsInterval);
+      setInterval(refreshExplorer, statsInterval);
       loadRoot("");
     }
 
