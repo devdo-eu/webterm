@@ -182,6 +182,20 @@ func getGitStatuses(dir string) map[string]string {
 	return statuses
 }
 
+// --- Shell integration (OSC 7 CWD reporting) ---
+
+func shellInit(shell string) string {
+	base := strings.ToLower(filepath.Base(shell))
+	switch {
+	case strings.Contains(base, "powershell") || strings.Contains(base, "pwsh"):
+		return "$function:__wt_op = $function:prompt\r\nfunction global:prompt { $e=[char]0x1b; $b=[char]7; [Console]::Write(\"${e}]7;$($PWD.Path)${b}\"); & $function:__wt_op }\r\ncls\r\n"
+	case strings.Contains(base, "cmd"):
+		return "prompt $E]7;$P$E\\$P$G\r\ncls\r\n"
+	default:
+		return ""
+	}
+}
+
 // --- Terminal WebSocket ---
 
 type resizeMsg struct {
@@ -203,6 +217,11 @@ func handleWS(w http.ResponseWriter, r *http.Request, shell string) {
 		return
 	}
 	defer cpty.Close()
+
+	// Inject shell integration for CWD tracking via OSC 7
+	if init := shellInit(shell); init != "" {
+		cpty.Write([]byte(init))
+	}
 
 	var wsMu sync.Mutex
 

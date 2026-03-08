@@ -38,7 +38,7 @@
     }
     .file-entry {
       display: flex; align-items: center;
-      padding: 2px 12px;
+      padding: 2px 12px 2px 12px;
       cursor: pointer;
       font-size: 13px; line-height: 22px;
       user-select: none;
@@ -117,14 +117,26 @@
     });
     window.addEventListener("resize", () => fitAddon.fit());
 
-    // ---- File panel ----
+    // ---- File panel (tree view) ----
     let currentPath = "";
+    let expandedDirs = new Set();
+    let dirCache = {};
+
+    function samePath(a, b) {
+      const norm = p => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+      return a && b && norm(a) === norm(b);
+    }
+
+    function pathSep(p) { return p.includes("/") ? "/" : "\\"; }
+
+    function esc(s) {
+      return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    }
 
     function gitBadge(status) {
       if (!status) return "";
       const first = status[0] !== "?" ? status[0] : "";
       const second = status.length > 1 ? status[1] : "";
-      // Pick most relevant: staged > unstaged > untracked
       let label, cls;
       if (status === "??") { label = "?"; cls = "git-U"; }
       else if (first === "A")  { label = "A"; cls = "git-A"; }
@@ -135,62 +147,95 @@
       return `<span class="git-badge ${cls}">${label}</span>`;
     }
 
-    async function loadFiles(path) {
+    async function fetchDir(path) {
       const params = path ? `?path=${encodeURIComponent(path)}` : "";
       const resp = await fetch(`/api/files${params}`);
       const data = await resp.json();
-      if (data.error) return;
+      if (data.error) return null;
+      dirCache[data.path] = data;
+      return data;
+    }
 
+    async function loadRoot(path) {
+      expandedDirs.clear();
+      dirCache = {};
+      const data = await fetchDir(path);
+      if (!data) return;
       currentPath = data.path;
       document.getElementById("sidebar-path").textContent = currentPath;
       document.getElementById("sidebar-branch").textContent =
         data.gitBranch ? "\u2387 " + data.gitBranch : "";
+      renderTree();
+    }
 
+    async function toggleDir(dirPath) {
+      if (expandedDirs.has(dirPath)) {
+        expandedDirs.delete(dirPath);
+        const prefix = dirPath.toLowerCase() + '/';
+        const prefixB = dirPath.toLowerCase() + '\\';
+        for (const p of [...expandedDirs]) {
+          const lp = p.toLowerCase();
+          if (lp.startsWith(prefix) || lp.startsWith(prefixB)) expandedDirs.delete(p);
+        }
+        renderTree();
+      } else {
+        if (!dirCache[dirPath]) {
+          const data = await fetchDir(dirPath);
+          if (!data) return;
+        }
+        expandedDirs.add(dirPath);
+        renderTree();
+      }
+    }
+
+    function renderTree() {
       const list = document.getElementById("file-list");
-      let html = `<div class="file-entry is-dir" data-dir="..">
-        <span class="file-icon">\u25C2</span>
-        <span class="file-name">..</span>
-      </div>`;
+      const root = dirCache[currentPath];
+      if (!root) { list.innerHTML = ''; return; }
+      list.innerHTML = renderEntries(root.entries, currentPath, 0);
+    }
 
-      for (const f of data.entries) {
+    function renderEntries(entries, parentPath, depth) {
+      const sep = pathSep(parentPath);
+      const pad = 12 + depth * 16;
+      let html = '';
+      for (const f of entries) {
+        const fullPath = parentPath + sep + f.name;
+        const expanded = f.isDir && expandedDirs.has(fullPath);
         const dirCls = f.isDir ? " is-dir" : "";
-        const icon = f.isDir ? "\u25B8" : "\u00B7";
-        html += `<div class="file-entry${dirCls}" data-${f.isDir ? "dir" : "file"}="${esc(f.name)}">
+        const icon = f.isDir ? (expanded ? "\u25BE" : "\u25B8") : "\u00B7";
+        html += `<div class="file-entry${dirCls}" ${f.isDir ? `data-dir="${esc(fullPath)}"` : `data-file="${esc(fullPath)}"`} style="padding-left:${pad}px">
           <span class="file-icon">${icon}</span>
           <span class="file-name">${esc(f.name)}</span>
           ${gitBadge(f.git)}
         </div>`;
+        if (expanded && dirCache[fullPath]) {
+          html += renderEntries(dirCache[fullPath].entries, fullPath, depth + 1);
+        }
       }
-      list.innerHTML = html;
-    }
-
-    function esc(s) {
-      return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-    }
-
-    function parentPath(p) {
-      const sep = p.includes("/") ? "/" : "\\";
-      const parts = p.split(/[/\\]/);
-      parts.pop();
-      return parts.join(sep) || parts[0] || p;
+      return html;
     }
 
     document.getElementById("file-list").addEventListener("click", (e) => {
       const entry = e.target.closest(".file-entry");
-      if (!entry) return;
-
-      if (entry.dataset.dir !== undefined) {
-        const name = entry.dataset.dir;
-        if (name === "..") {
-          loadFiles(parentPath(currentPath));
-        } else {
-          const sep = currentPath.includes("/") ? "/" : "\\";
-          loadFiles(currentPath + sep + name);
-        }
-      }
+      if (!entry || entry.dataset.dir === undefined) return;
+      toggleDir(entry.dataset.dir);
     });
 
-    loadFiles("");
+    // CWD tracking via OSC 7 — sync file panel with terminal directory
+    term.parser.registerOscHandler(7, (data) => {
+      let path = data;
+      if (path.startsWith('file://')) {
+        try { path = decodeURIComponent(new URL(path).pathname); } catch(e) { return true; }
+        if (/^\/[A-Za-z]:/.test(path)) path = path.slice(1);
+      }
+      if (path && !samePath(path, currentPath)) {
+        loadRoot(path);
+      }
+      return true;
+    });
+
+    loadRoot("");
   </script>
 </body>
 </html>
