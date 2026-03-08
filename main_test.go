@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // --- shellInit ---
@@ -317,6 +318,179 @@ func TestFileEntrySorting(t *testing.T) {
 	}
 }
 
+// --- checkSession ---
+
+func addTestSession(token string, expiry time.Time) {
+	sessionsMu.Lock()
+	sessions[token] = expiry
+	sessionsMu.Unlock()
+}
+
+func clearSessions() {
+	sessionsMu.Lock()
+	for k := range sessions {
+		delete(sessions, k)
+	}
+	sessionsMu.Unlock()
+}
+
+func reqWithSession(method, url, token string) *http.Request {
+	req := httptest.NewRequest(method, url, nil)
+	req.AddCookie(&http.Cookie{Name: "webterm_session", Value: token})
+	return req
+}
+
+func TestCheckSessionNoCookie(t *testing.T) {
+	req := httptest.NewRequest("GET", "/", nil)
+	if checkSession(req) {
+		t.Error("checkSession should return false without cookie")
+	}
+}
+
+func TestCheckSessionValidToken(t *testing.T) {
+	clearSessions()
+	addTestSession("valid-token", time.Now().Add(time.Hour))
+	defer clearSessions()
+
+	req := reqWithSession("GET", "/", "valid-token")
+	if !checkSession(req) {
+		t.Error("checkSession should return true for valid token")
+	}
+}
+
+func TestCheckSessionExpiredToken(t *testing.T) {
+	clearSessions()
+	addTestSession("expired-token", time.Now().Add(-time.Hour))
+	defer clearSessions()
+
+	req := reqWithSession("GET", "/", "expired-token")
+	if checkSession(req) {
+		t.Error("checkSession should return false for expired token")
+	}
+
+	sessionsMu.Lock()
+	_, exists := sessions["expired-token"]
+	sessionsMu.Unlock()
+	if exists {
+		t.Error("expired token should be removed from sessions map")
+	}
+}
+
+func TestCheckSessionInvalidToken(t *testing.T) {
+	clearSessions()
+	defer clearSessions()
+
+	req := reqWithSession("GET", "/", "nonexistent-token")
+	if checkSession(req) {
+		t.Error("checkSession should return false for unknown token")
+	}
+}
+
+// --- requireAuth ---
+
+func TestRequireAuthBlocksWithoutSession(t *testing.T) {
+	handler := requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	})
+
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	if w.Code != 401 {
+		t.Errorf("status = %d, want 401", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+}
+
+func TestRequireAuthPassesWithSession(t *testing.T) {
+	clearSessions()
+	addTestSession("good-token", time.Now().Add(time.Hour))
+	defer clearSessions()
+
+	called := false
+	handler := requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(200)
+	})
+
+	req := reqWithSession("GET", "/", "good-token")
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	if w.Code != 200 {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	if !called {
+		t.Error("next handler was not called")
+	}
+}
+
+// --- handleAuthCheck ---
+
+func TestHandleAuthCheckNoSession(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/auth/check", nil)
+	w := httptest.NewRecorder()
+	handleAuthCheck(w, req)
+
+	if w.Code != 401 {
+		t.Errorf("status = %d, want 401", w.Code)
+	}
+}
+
+func TestHandleAuthCheckWithSession(t *testing.T) {
+	clearSessions()
+	addTestSession("check-token", time.Now().Add(time.Hour))
+	defer clearSessions()
+
+	req := reqWithSession("GET", "/api/auth/check", "check-token")
+	w := httptest.NewRecorder()
+	handleAuthCheck(w, req)
+
+	if w.Code != 200 {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+}
+
+// --- handleLogin ---
+
+func TestHandleLoginWrongMethod(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/auth/login", nil)
+	w := httptest.NewRecorder()
+	handleLogin(w, req)
+
+	if w.Code != 405 {
+		t.Errorf("status = %d, want 405", w.Code)
+	}
+}
+
+func TestHandleLoginInvalidJSON(t *testing.T) {
+	body := strings.NewReader("not json")
+	req := httptest.NewRequest("POST", "/api/auth/login", body)
+	w := httptest.NewRecorder()
+	handleLogin(w, req)
+
+	if w.Code != 400 {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestHandleLoginBadCredentials(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping slow brute-force delay test")
+	}
+	body := strings.NewReader(`{"username":"__nonexistent_user__","password":"wrong"}`)
+	req := httptest.NewRequest("POST", "/api/auth/login", body)
+	w := httptest.NewRecorder()
+	handleLogin(w, req)
+
+	if w.Code != 401 {
+		t.Errorf("status = %d, want 401", w.Code)
+	}
+}
+
 // --- content type ---
 
 func TestAPIResponsesHaveJSONContentType(t *testing.T) {
@@ -329,6 +503,8 @@ func TestAPIResponsesHaveJSONContentType(t *testing.T) {
 		{"files", "GET", "/api/files", handleFiles},
 		{"file", "GET", "/api/file?path=nonexistent", handleFile},
 		{"stats", "GET", "/api/stats", handleStats},
+		{"auth-check", "GET", "/api/auth/check", handleAuthCheck},
+		{"auth-login", "GET", "/api/auth/login", handleLogin},
 	}
 
 	for _, h := range handlers {

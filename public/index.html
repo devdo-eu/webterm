@@ -184,6 +184,41 @@
     .cm-s-default .cm-error { color: #f85149; }
     .file-entry.active { background: #1c2128; }
 
+    /* --- Login --- */
+    #login-overlay {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: #0d1117;
+      display: none; align-items: center; justify-content: center;
+      z-index: 9999;
+    }
+    #login-card {
+      background: #161b22; border: 1px solid #30363d;
+      border-radius: 8px; padding: 32px; width: 320px;
+    }
+    #login-title {
+      font-size: 24px; font-weight: 700; color: #c9d1d9;
+      text-align: center; margin-bottom: 24px; letter-spacing: 1px;
+    }
+    #login-form { display: flex; flex-direction: column; gap: 12px; }
+    #login-form input {
+      background: #0d1117; border: 1px solid #30363d; color: #c9d1d9;
+      padding: 10px 12px; border-radius: 6px; font-size: 14px;
+      font-family: inherit; outline: none;
+    }
+    #login-form input:focus { border-color: #58a6ff; }
+    #login-btn {
+      background: #238636; color: #fff; border: none;
+      padding: 10px; border-radius: 6px; font-size: 14px;
+      cursor: pointer; font-family: inherit; font-weight: 600;
+      margin-top: 4px;
+    }
+    #login-btn:hover { background: #2ea043; }
+    #login-btn:disabled { opacity: 0.6; cursor: default; }
+    #login-error {
+      color: #f85149; font-size: 12px; text-align: center;
+      min-height: 16px;
+    }
+
     /* scrollbar */
     #file-list::-webkit-scrollbar { width: 6px; }
     #file-list::-webkit-scrollbar-track { background: transparent; }
@@ -191,7 +226,18 @@
   </style>
 </head>
 <body>
-  <div id="app">
+  <div id="login-overlay">
+    <div id="login-card">
+      <div id="login-title">webterm</div>
+      <form id="login-form">
+        <input type="text" id="login-user" placeholder="Username" autocomplete="username">
+        <input type="password" id="login-pass" placeholder="Password" autocomplete="current-password">
+        <button type="submit" id="login-btn">Log in</button>
+        <div id="login-error"></div>
+      </form>
+    </div>
+  </div>
+  <div id="app" style="display:none">
     <div id="main-area">
     <div id="sidebar">
       <div id="sidebar-header">
@@ -366,7 +412,7 @@
           `${esc(label)}` +
           (tabs.length > 1 ? `<span class="tab-close" data-tab-id="${t.id}">&times;</span>` : '') +
           `</div>`;
-      }).join('') + `<button id="tab-add" title="Nowy terminal">+</button>`;
+      }).join('') + `<button id="tab-add" title="New terminal">+</button>`;
     }
 
     document.getElementById('tab-bar').addEventListener('click', (e) => {
@@ -378,7 +424,6 @@
     });
 
     window.addEventListener('resize', () => { const t = getActiveTab(); if (t) t.fitAddon.fit(); });
-    createTab();
 
     // ---- File panel (tree view) ----
     let currentPath = "";
@@ -685,10 +730,54 @@
       } catch(e) {}
     }
 
-    setInterval(updateStats, 1000);
-    updateStats();
+    // ---- Auth + startup ----
+    function startApp() {
+      document.getElementById('app').style.display = 'flex';
+      createTab();
+      setInterval(updateStats, 1000);
+      updateStats();
+      loadRoot("");
+    }
 
-    loadRoot("");
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById('login-btn');
+      const errEl = document.getElementById('login-error');
+      btn.disabled = true;
+      errEl.textContent = '';
+      try {
+        const resp = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            username: document.getElementById('login-user').value,
+            password: document.getElementById('login-pass').value
+          })
+        });
+        if (resp.ok) {
+          document.getElementById('login-overlay').style.display = 'none';
+          startApp();
+        } else {
+          errEl.textContent = 'Invalid username or password';
+        }
+      } catch(e) {
+        errEl.textContent = 'Connection error';
+      }
+      btn.disabled = false;
+    });
+
+    (async () => {
+      try {
+        const resp = await fetch('/api/auth/check');
+        if (resp.ok) {
+          document.getElementById('login-overlay').style.display = 'none';
+          startApp();
+          return;
+        }
+      } catch(e) {}
+      document.getElementById('login-overlay').style.display = 'flex';
+      document.getElementById('login-user').focus();
+    })();
   </script>
 </body>
 </html>

@@ -9,6 +9,7 @@ Web-based terminal with a file explorer sidebar. Runs on Windows using ConPTY.
 - **File editor** — click any file to open an in-browser editor with syntax highlighting (Python, Go, HTML, Markdown, JS/TS, CSS, YAML, SQL, and more via [CodeMirror](https://codemirror.net/5/)), save (Ctrl+S), unsaved change detection, and line ending preservation
 - **Resource monitor** — status bar with CPU, RAM, GPU (NVIDIA), power draw, temperatures (CPU via WMI, GPU), and network throughput
 - **Shell integration** — file explorer auto-syncs with terminal CWD via OSC 7 (PowerShell, pwsh, cmd.exe)
+- **Authentication** — Windows login (LogonUserW) with cookie sessions, brute-force delay, all endpoints protected
 - **Configuration** — `webterm.ini` file for port and shell settings
 - **Single binary** — all static assets embedded via Go `embed`
 

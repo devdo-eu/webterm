@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"crypto/rand"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -566,6 +568,126 @@ func handleStats(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(s)
 }
 
+// --- Authentication ---
+
+var (
+	modAdvapi32    = syscall.NewLazyDLL("advapi32.dll")
+	procLogonUserW = modAdvapi32.NewProc("LogonUserW")
+)
+
+var (
+	sessions   = make(map[string]time.Time)
+	sessionsMu sync.Mutex
+)
+
+func validateLogin(username, password string) bool {
+	domain := "."
+	if i := strings.IndexByte(username, '\\'); i >= 0 {
+		domain = username[:i]
+		username = username[i+1:]
+	}
+	uUser, _ := syscall.UTF16PtrFromString(username)
+	uDomain, _ := syscall.UTF16PtrFromString(domain)
+	uPass, _ := syscall.UTF16PtrFromString(password)
+	var token syscall.Handle
+	ret, _, _ := procLogonUserW.Call(
+		uintptr(unsafe.Pointer(uUser)),
+		uintptr(unsafe.Pointer(uDomain)),
+		uintptr(unsafe.Pointer(uPass)),
+		3, // LOGON32_LOGON_NETWORK
+		0, // LOGON32_PROVIDER_DEFAULT
+		uintptr(unsafe.Pointer(&token)),
+	)
+	if ret != 0 {
+		syscall.CloseHandle(token)
+		return true
+	}
+	return false
+}
+
+func checkSession(r *http.Request) bool {
+	cookie, err := r.Cookie("webterm_session")
+	if err != nil {
+		return false
+	}
+	sessionsMu.Lock()
+	defer sessionsMu.Unlock()
+	exp, ok := sessions[cookie.Value]
+	if !ok || time.Now().After(exp) {
+		delete(sessions, cookie.Value)
+		return false
+	}
+	return true
+}
+
+func requireAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !checkSession(r) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(401)
+			json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+			return
+		}
+		next(w, r)
+	}
+}
+
+func handleAuthCheck(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if checkSession(r) {
+		json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		return
+	}
+	w.WriteHeader(401)
+	json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+}
+
+func handleLogin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != "POST" {
+		w.WriteHeader(405)
+		json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		return
+	}
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid request"})
+		return
+	}
+	if !validateLogin(body.Username, body.Password) {
+		time.Sleep(10 * time.Second)
+		w.WriteHeader(401)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid credentials"})
+		return
+	}
+	b := make([]byte, 32)
+	rand.Read(b)
+	token := hex.EncodeToString(b)
+	sessionsMu.Lock()
+	now := time.Now()
+	for k, v := range sessions {
+		if now.After(v) {
+			delete(sessions, k)
+		}
+	}
+	sessions[token] = now.Add(24 * time.Hour)
+	sessionsMu.Unlock()
+	http.SetCookie(w, &http.Cookie{
+		Name:     "webterm_session",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   86400,
+	})
+	log.Printf("login: %s", body.Username)
+	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}
+
 // --- Main ---
 
 func main() {
@@ -574,12 +696,14 @@ func main() {
 
 	publicFS, _ := fs.Sub(staticFiles, "public")
 	http.Handle("/", http.FileServer(http.FS(publicFS)))
-	http.HandleFunc("/api/files", handleFiles)
-	http.HandleFunc("/api/file", handleFile)
-	http.HandleFunc("/api/stats", handleStats)
-	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/api/auth/check", handleAuthCheck)
+	http.HandleFunc("/api/auth/login", handleLogin)
+	http.HandleFunc("/api/files", requireAuth(handleFiles))
+	http.HandleFunc("/api/file", requireAuth(handleFile))
+	http.HandleFunc("/api/stats", requireAuth(handleStats))
+	http.HandleFunc("/ws", requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		handleWS(w, r, cfg.Shell)
-	})
+	}))
 
 	addr := fmt.Sprintf("0.0.0.0:%s", cfg.Port)
 	log.Printf("webterm listening on http://%s/", addr)
