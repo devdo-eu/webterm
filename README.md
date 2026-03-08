@@ -10,7 +10,7 @@ Web-based terminal with a file explorer sidebar. Runs on Windows using ConPTY.
 - **Resource monitor** — status bar with CPU, RAM, GPU (NVIDIA), power draw, temperatures (CPU via WMI, GPU), and network throughput
 - **Shell integration** — file explorer auto-syncs with terminal CWD via OSC 7 (PowerShell, pwsh, cmd.exe)
 - **Authentication** — Windows login (LogonUserW) with cookie sessions, brute-force delay, all endpoints protected
-- **Configuration** — `webterm.ini` file for port and shell settings
+- **Configuration** — CLI flags for port, shell, and monitoring interval
 - **Single binary** — all static assets embedded via Go `embed`
 
 ## Quick start
@@ -23,12 +23,15 @@ Open `http://localhost:1122` in a browser.
 
 ## Configuration
 
-Edit `webterm.ini` next to the executable:
-
-```ini
-port = 1122
-shell = powershell.exe
 ```
+webterm.exe -port 8080 -shell cmd.exe -stats 5000
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-port` | `1122` | Listen port |
+| `-shell` | `powershell.exe` | Shell executable |
+| `-stats` | `2000` | Resource monitor refresh interval (ms) |
 
 ## Build
 

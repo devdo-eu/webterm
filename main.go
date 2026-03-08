@@ -1,11 +1,11 @@
 package main
 
 import (
-	"bufio"
 	"crypto/rand"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io/fs"
 	"log"
@@ -32,43 +32,11 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-type config struct {
-	Port  string
-	Shell string
-}
-
-func loadConfig() config {
-	cfg := config{Port: "1122", Shell: "powershell.exe"}
-
-	exePath, err := os.Executable()
-	if err != nil {
-		return cfg
-	}
-	f, err := os.Open(filepath.Join(filepath.Dir(exePath), "webterm.ini"))
-	if err != nil {
-		return cfg
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || line[0] == '#' || line[0] == ';' {
-			continue
-		}
-		k, v, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		switch strings.TrimSpace(strings.ToLower(k)) {
-		case "port":
-			cfg.Port = strings.TrimSpace(v)
-		case "shell":
-			cfg.Shell = strings.TrimSpace(v)
-		}
-	}
-	return cfg
-}
+var (
+	flagPort  = flag.String("port", "1122", "listen port")
+	flagShell = flag.String("shell", "powershell.exe", "shell executable")
+	flagStats = flag.Int("stats", 2000, "resource monitor refresh interval in milliseconds")
+)
 
 // --- File explorer API ---
 
@@ -390,11 +358,12 @@ type mibIfRow struct {
 }
 
 type statsResponse struct {
-	CPU     float64  `json:"cpu"`
-	RAM     ramInfo  `json:"ram"`
-	GPU     *gpuInfo `json:"gpu"`
-	Net     netInfo  `json:"net"`
-	CPUTemp *float64 `json:"cpuTemp"`
+	CPU      float64  `json:"cpu"`
+	RAM      ramInfo  `json:"ram"`
+	GPU      *gpuInfo `json:"gpu"`
+	Net      netInfo  `json:"net"`
+	CPUTemp  *float64 `json:"cpuTemp"`
+	Interval int      `json:"interval"`
 }
 
 type ramInfo struct {
@@ -517,7 +486,7 @@ func gpuStats() *gpuInfo {
 	}
 }
 
-func statsCollector() {
+func statsCollector(interval time.Duration) {
 	prevIdle, prevTotal := cpuTimes()
 	prevRx, prevTx := netTotals()
 	prevTime := time.Now()
@@ -525,7 +494,7 @@ func statsCollector() {
 	hasCPUTemp := true
 
 	for {
-		time.Sleep(1 * time.Second)
+		time.Sleep(interval)
 
 		idle, total := cpuTimes()
 		dIdle, dTotal := idle-prevIdle, total-prevTotal
@@ -569,7 +538,7 @@ func statsCollector() {
 		}
 
 		statsMu.Lock()
-		latestStats = statsResponse{CPU: cpu, RAM: ram, GPU: gpu, Net: netInfo{Rx: nRx, Tx: nTx}, CPUTemp: ct}
+		latestStats = statsResponse{CPU: cpu, RAM: ram, GPU: gpu, Net: netInfo{Rx: nRx, Tx: nTx}, CPUTemp: ct, Interval: *flagStats}
 		statsMu.Unlock()
 	}
 }
@@ -705,8 +674,8 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 // --- Main ---
 
 func main() {
-	cfg := loadConfig()
-	go statsCollector()
+	flag.Parse()
+	go statsCollector(time.Duration(*flagStats) * time.Millisecond)
 
 	publicFS, _ := fs.Sub(staticFiles, "public")
 	http.Handle("/", http.FileServer(http.FS(publicFS)))
@@ -716,10 +685,10 @@ func main() {
 	http.HandleFunc("/api/file", requireAuth(handleFile))
 	http.HandleFunc("/api/stats", requireAuth(handleStats))
 	http.HandleFunc("/ws", requireAuth(func(w http.ResponseWriter, r *http.Request) {
-		handleWS(w, r, cfg.Shell)
+		handleWS(w, r, *flagShell)
 	}))
 
-	addr := fmt.Sprintf("0.0.0.0:%s", cfg.Port)
+	addr := fmt.Sprintf("0.0.0.0:%s", *flagPort)
 	log.Printf("webterm listening on http://%s/", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))
 }

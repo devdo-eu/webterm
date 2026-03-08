@@ -695,6 +695,8 @@
     });
 
     // ---- Resource monitor ----
+    let statsInterval = 2000;
+
     function fmtSpeed(b) {
       if (b < 1024) return b + ' B/s';
       if (b < 1048576) return (b / 1024).toFixed(1) + ' KB/s';
@@ -705,6 +707,7 @@
       try {
         const r = await fetch('/api/stats');
         const s = await r.json();
+        if (s.interval) statsInterval = s.interval;
 
         document.getElementById('stat-cpu').textContent = s.cpu.toFixed(1) + '%';
         document.getElementById('bar-cpu').style.width = Math.min(100, s.cpu).toFixed(1) + '%';
@@ -755,11 +758,11 @@
     }
 
     // ---- Auth + startup ----
-    function startApp() {
+    async function startApp() {
       document.getElementById('app').style.display = 'flex';
       createTab();
-      setInterval(updateStats, 1000);
-      updateStats();
+      await updateStats();
+      setInterval(updateStats, statsInterval);
       loadRoot("");
     }
 
