@@ -52,6 +52,25 @@ var (
 
 var tlsEnabled bool
 
+const (
+	maxFileSize            = 5 << 20 // 5 MB
+	ptyBufSize             = 16384
+	loginDelay             = 10 * time.Second
+	sessionTTL             = 24 * time.Hour
+	tokenLen               = 32
+	ifTypeSoftwareLoopback = 24 // MIB_IF_TYPE_SOFTWARE_LOOPBACK
+	ifOperConnected        = 4  // INTERNAL_IF_OPER_STATUS: connected (WAN)
+	ifOperOperational      = 5  // INTERNAL_IF_OPER_STATUS: operational (LAN)
+)
+
+// writeError sends a JSON error response. Encoding failures are ignorable
+// because the HTTP status code is already written at that point.
+func writeError(w http.ResponseWriter, code int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
 // --- File explorer API ---
 
 type fileEntry struct {
@@ -72,14 +91,13 @@ func handleFiles(w http.ResponseWriter, r *http.Request) {
 
 	dir := r.URL.Query().Get("path")
 	if dir == "" {
-		dir, _ = os.Getwd()
+		dir, _ = os.Getwd() // empty string is an acceptable fallback
 	}
 	dir = filepath.Clean(dir)
 
 	dirEntries, err := os.ReadDir(dir)
 	if err != nil {
-		w.WriteHeader(400)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -190,57 +208,52 @@ func handleFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	filePath := r.URL.Query().Get("path")
 	if filePath == "" {
-		w.WriteHeader(400)
-		json.NewEncoder(w).Encode(map[string]string{"error": "path required"})
+		writeError(w, http.StatusBadRequest, "path required")
 		return
 	}
 	filePath = filepath.Clean(filePath)
 
 	switch r.Method {
-	case "GET":
+	case http.MethodGet:
 		info, err := os.Stat(filePath)
 		if err != nil {
-			w.WriteHeader(400)
-			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		if info.IsDir() {
-			w.WriteHeader(400)
-			json.NewEncoder(w).Encode(map[string]string{"error": "is a directory"})
+			writeError(w, http.StatusBadRequest, "is a directory")
 			return
 		}
-		if info.Size() > 5<<20 {
-			w.WriteHeader(400)
-			json.NewEncoder(w).Encode(map[string]string{"error": "file too large (max 5 MB)"})
+		if info.Size() > maxFileSize {
+			writeError(w, http.StatusBadRequest, "file too large (max 5 MB)")
 			return
 		}
 		content, err := os.ReadFile(filePath)
 		if err != nil {
-			w.WriteHeader(400)
-			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]string{"path": filePath, "content": string(content)})
+		json.NewEncoder(w).Encode(map[string]string{
+			"path":    filePath,
+			"content": string(content),
+		})
 
-	case "PUT":
+	case http.MethodPut:
 		var body struct {
 			Content string `json:"content"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			w.WriteHeader(400)
-			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		if err := os.WriteFile(filePath, []byte(body.Content), 0644); err != nil {
-			w.WriteHeader(500)
-			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]string{"ok": "true"})
 
 	default:
-		w.WriteHeader(405)
-		json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
@@ -283,14 +296,15 @@ func handleWS(w http.ResponseWriter, r *http.Request, shell string) {
 	}
 	defer cpty.Close()
 
-	// Inject shell integration for CWD tracking via OSC 7
+	// Inject shell integration for CWD tracking via OSC 7.
+	// Write error is ignorable — shell works without integration.
 	if init := shellInit(shell); init != "" {
 		cpty.Write([]byte(init))
 	}
 
 	var wsMu sync.Mutex
 
-	// Monitor process exit
+	// Monitor process exit.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
@@ -302,7 +316,7 @@ func handleWS(w http.ResponseWriter, r *http.Request, shell string) {
 
 	// ConPTY → WebSocket
 	go func() {
-		buf := make([]byte, 16384)
+		buf := make([]byte, ptyBufSize)
 		for {
 			n, err := cpty.Read(buf)
 			if n > 0 {
@@ -316,6 +330,7 @@ func handleWS(w http.ResponseWriter, r *http.Request, shell string) {
 			if err != nil {
 				log.Printf("pty read: %v", err)
 				wsMu.Lock()
+				// Best-effort close frame; connection is shutting down.
 				conn.WriteMessage(websocket.CloseMessage,
 					websocket.FormatCloseMessage(websocket.CloseNormalClosure, "terminal exited"))
 				wsMu.Unlock()
@@ -393,6 +408,7 @@ type mibIfRow struct {
 	OutErrors       uint32
 	DescrLen        uint32
 	Descr           [256]byte
+	_               [4]byte // padding — Windows sizeof(MIB_IFROW)=860
 }
 
 type statsResponse struct {
@@ -428,6 +444,8 @@ var (
 	latestStats statsResponse
 )
 
+// cpuTimes returns cumulative idle and total CPU ticks via GetSystemTimes.
+// On failure the syscall writes zero values, yielding 0% CPU — acceptable.
 func cpuTimes() (idle, total uint64) {
 	var idleFt, kernelFt, userFt [2]uint32
 	procGetSystemTimes.Call(
@@ -441,6 +459,8 @@ func cpuTimes() (idle, total uint64) {
 	return
 }
 
+// ramStats returns physical memory usage via GlobalMemoryStatusEx.
+// On failure the struct stays zeroed, yielding 0/0 — acceptable.
 func ramStats() ramInfo {
 	var ms memStatusEx
 	ms.Length = uint32(unsafe.Sizeof(ms))
@@ -449,32 +469,33 @@ func ramStats() ramInfo {
 }
 
 func netTotals() (rx, tx uint64) {
+	// First call with nil buffer queries the required size.
 	var size uint32
 	procGetIfTable.Call(0, uintptr(unsafe.Pointer(&size)), 0)
 	if size == 0 {
-		return
+		return 0, 0
 	}
 	buf := make([]byte, size)
-	ret, _, _ := procGetIfTable.Call(
+	ret, _, _ := procGetIfTable.Call( // errno is redundant with ret
 		uintptr(unsafe.Pointer(&buf[0])),
 		uintptr(unsafe.Pointer(&size)),
 		0,
 	)
 	if ret != 0 {
-		return
+		return 0, 0
 	}
 	n := *(*uint32)(unsafe.Pointer(&buf[0]))
 	rowSz := int(unsafe.Sizeof(mibIfRow{}))
 	for i := 0; i < int(n); i++ {
 		off := 4 + i*rowSz
 		row := (*mibIfRow)(unsafe.Pointer(&buf[off]))
-		if row.OperStatus != 1 || row.Type == 24 {
+		if (row.OperStatus != ifOperConnected && row.OperStatus != ifOperOperational) || row.Type == ifTypeSoftwareLoopback {
 			continue
 		}
 		rx += uint64(row.InOctets)
 		tx += uint64(row.OutOctets)
 	}
-	return
+	return rx, tx
 }
 
 func cpuTemp() (float64, bool) {
@@ -502,6 +523,8 @@ func cpuTemp() (float64, bool) {
 	return maxTemp, found
 }
 
+// gpuStats queries nvidia-smi for GPU metrics. Parse errors default to
+// zero values which is acceptable for a best-effort monitoring display.
 func gpuStats() *gpuInfo {
 	out, err := exec.Command("nvidia-smi",
 		"--query-gpu=utilization.gpu,memory.used,memory.total,name,power.draw,temperature.gpu",
@@ -524,6 +547,8 @@ func gpuStats() *gpuInfo {
 	}
 }
 
+// statsCollector polls system metrics in a loop. It runs for the lifetime
+// of the process, started from main as a background goroutine.
 func statsCollector(interval time.Duration) {
 	prevIdle, prevTotal := cpuTimes()
 	prevRx, prevTx := netTotals()
@@ -546,14 +571,14 @@ func statsCollector(interval time.Duration) {
 
 		rx, tx := netTotals()
 		now := time.Now()
-		dt := now.Sub(prevTime).Seconds()
-		var nRx, nTx uint64
-		if dt > 0 {
+		elapsed := now.Sub(prevTime).Seconds()
+		var rxRate, txRate uint64
+		if elapsed > 0 {
 			if rx >= prevRx {
-				nRx = uint64(float64(rx-prevRx) / dt)
+				rxRate = uint64(float64(rx-prevRx) / elapsed)
 			}
 			if tx >= prevTx {
-				nTx = uint64(float64(tx-prevTx) / dt)
+				txRate = uint64(float64(tx-prevTx) / elapsed)
 			}
 		}
 		prevRx, prevTx, prevTime = rx, tx, now
@@ -566,17 +591,24 @@ func statsCollector(interval time.Duration) {
 			}
 		}
 
-		var ct *float64
+		var temp *float64
 		if hasCPUTemp {
 			if t, ok := cpuTemp(); ok {
-				ct = &t
+				temp = &t
 			} else {
 				hasCPUTemp = false
 			}
 		}
 
 		statsMu.Lock()
-		latestStats = statsResponse{CPU: cpu, RAM: ram, GPU: gpu, Net: netInfo{Rx: nRx, Tx: nTx}, CPUTemp: ct, Interval: *flagStats}
+		latestStats = statsResponse{
+			CPU:      cpu,
+			RAM:      ram,
+			GPU:      gpu,
+			Net:      netInfo{Rx: rxRate, Tx: txRate},
+			CPUTemp:  temp,
+			Interval: *flagStats,
+		}
 		statsMu.Unlock()
 	}
 }
@@ -607,6 +639,8 @@ func validateLogin(username, password string) bool {
 		domain = username[:i]
 		username = username[i+1:]
 	}
+	// UTF16PtrFromString only fails on embedded NUL which valid
+	// credentials never contain.
 	uUser, _ := syscall.UTF16PtrFromString(username)
 	uDomain, _ := syscall.UTF16PtrFromString(domain)
 	uPass, _ := syscall.UTF16PtrFromString(password)
@@ -644,9 +678,7 @@ func checkSession(r *http.Request) bool {
 func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !checkSession(r) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(401)
-			json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		next(w, r)
@@ -659,15 +691,13 @@ func handleAuthCheck(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 		return
 	}
-	w.WriteHeader(401)
-	json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+	writeError(w, http.StatusUnauthorized, "unauthorized")
 }
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	if r.Method != "POST" {
-		w.WriteHeader(405)
-		json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	var body struct {
@@ -675,19 +705,17 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		w.WriteHeader(400)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid request"})
+		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 	if !validateLogin(body.Username, body.Password) {
-		time.Sleep(10 * time.Second)
-		w.WriteHeader(401)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid credentials"})
+		time.Sleep(loginDelay)
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	b := make([]byte, 32)
-	rand.Read(b)
-	token := hex.EncodeToString(b)
+	tokenRaw := make([]byte, tokenLen)
+	rand.Read(tokenRaw) // crypto/rand.Read never returns error
+	token := hex.EncodeToString(tokenRaw)
 	sessionsMu.Lock()
 	now := time.Now()
 	for k, v := range sessions {
@@ -695,7 +723,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 			delete(sessions, k)
 		}
 	}
-	sessions[token] = now.Add(24 * time.Hour)
+	sessions[token] = now.Add(sessionTTL)
 	sessionsMu.Unlock()
 	http.SetCookie(w, &http.Cookie{
 		Name:     "webterm_session",
@@ -704,13 +732,28 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		Secure:   tlsEnabled,
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   86400,
+		MaxAge:   int(sessionTTL.Seconds()),
 	})
-	log.Printf("login: %s", body.Username)
+	log.Printf("login: %q", body.Username)
 	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
 // --- TLS ---
+
+// tlsErrorLog returns a logger that silences routine TLS handshake errors
+// (e.g. clients rejecting self-signed certs). These are expected and noisy.
+func tlsErrorLog() *log.Logger {
+	return log.New(&tlsHandshakeFilter{}, "", 0)
+}
+
+type tlsHandshakeFilter struct{}
+
+func (f *tlsHandshakeFilter) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), "TLS handshake error") {
+		return len(p), nil // swallow
+	}
+	return os.Stderr.Write(p)
+}
 
 func localIPs() []net.IP {
 	ips := []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback}
@@ -745,7 +788,7 @@ func generateSelfSignedCert() (tls.Certificate, error) {
 		return tls.Certificate{}, err
 	}
 	ips := localIPs()
-	hostname, _ := os.Hostname()
+	hostname, _ := os.Hostname() // empty hostname is acceptable
 	dnsNames := []string{"localhost"}
 	if hostname != "" {
 		dnsNames = append(dnsNames, hostname)
@@ -784,7 +827,7 @@ func main() {
 	}
 	tlsEnabled = *flagTLS || *flagTLSCert != ""
 
-	publicFS, _ := fs.Sub(staticFiles, "public")
+	publicFS, _ := fs.Sub(staticFiles, "public") // embedded FS always contains "public"
 	http.Handle("/", http.FileServer(http.FS(publicFS)))
 	http.HandleFunc("/api/auth/check", handleAuthCheck)
 	http.HandleFunc("/api/auth/login", handleLogin)
@@ -803,6 +846,7 @@ func main() {
 				Addr:         addr,
 				TLSConfig:    &tls.Config{MinVersion: tls.VersionTLS12},
 				TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
+				ErrorLog:     tlsErrorLog(),
 			}
 			log.Printf("webterm listening on https://%s/", addr)
 			log.Fatal(srv.ListenAndServeTLS(*flagTLSCert, *flagTLSKey))
@@ -811,6 +855,7 @@ func main() {
 			if err != nil {
 				log.Fatalf("failed to generate self-signed certificate: %v", err)
 			}
+			// Cert was just created so parsing always succeeds.
 			parsed, _ := x509.ParseCertificate(cert.Certificate[0])
 			var sans []string
 			for _, ip := range parsed.IPAddresses {
@@ -825,6 +870,7 @@ func main() {
 					MinVersion:   tls.VersionTLS12,
 				},
 				TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
+				ErrorLog:     tlsErrorLog(),
 			}
 			log.Fatal(srv.ListenAndServeTLS("", ""))
 		}

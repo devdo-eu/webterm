@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/x509"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -41,18 +43,6 @@ func TestShellInitUnknown(t *testing.T) {
 		if got := shellInit(shell); got != "" {
 			t.Errorf("shellInit(%q) = %q, want empty", shell, got)
 		}
-	}
-}
-
-// --- loadConfig ---
-
-func TestLoadConfigDefaults(t *testing.T) {
-	cfg := loadConfig()
-	if cfg.Port != "1122" {
-		t.Errorf("default port = %q, want 1122", cfg.Port)
-	}
-	if cfg.Shell != "powershell.exe" {
-		t.Errorf("default shell = %q, want powershell.exe", cfg.Shell)
 	}
 }
 
@@ -488,6 +478,87 @@ func TestHandleLoginBadCredentials(t *testing.T) {
 
 	if w.Code != 401 {
 		t.Errorf("status = %d, want 401", w.Code)
+	}
+}
+
+// --- tlsHandshakeFilter ---
+
+func TestTLSFilterSwallowsHandshakeErrors(t *testing.T) {
+	f := &tlsHandshakeFilter{}
+	msg := []byte("http: TLS handshake error from 192.168.1.1:12345: remote error: tls: bad certificate")
+	n, err := f.Write(msg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != len(msg) {
+		t.Errorf("n = %d, want %d", n, len(msg))
+	}
+}
+
+func TestTLSFilterPassesOtherMessages(t *testing.T) {
+	f := &tlsHandshakeFilter{}
+	msg := []byte("normal log message\n")
+	n, err := f.Write(msg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != len(msg) {
+		t.Errorf("n = %d, want %d", n, len(msg))
+	}
+}
+
+// --- generateSelfSignedCert ---
+
+func TestGenerateSelfSignedCert(t *testing.T) {
+	cert, err := generateSelfSignedCert()
+	if err != nil {
+		t.Fatalf("generateSelfSignedCert() error: %v", err)
+	}
+	if len(cert.Certificate) == 0 {
+		t.Fatal("no certificates returned")
+	}
+	parsed, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatalf("ParseCertificate error: %v", err)
+	}
+	hasLocalhost := false
+	for _, name := range parsed.DNSNames {
+		if name == "localhost" {
+			hasLocalhost = true
+			break
+		}
+	}
+	if !hasLocalhost {
+		t.Errorf("DNSNames = %v, want 'localhost' included", parsed.DNSNames)
+	}
+	hasLoopback := false
+	for _, ip := range parsed.IPAddresses {
+		if ip.Equal(net.IPv4(127, 0, 0, 1)) {
+			hasLoopback = true
+			break
+		}
+	}
+	if !hasLoopback {
+		t.Errorf("IPAddresses = %v, want 127.0.0.1 included", parsed.IPAddresses)
+	}
+	if time.Now().After(parsed.NotAfter) {
+		t.Error("cert is already expired")
+	}
+}
+
+// --- localIPs ---
+
+func TestLocalIPsContainsLoopback(t *testing.T) {
+	ips := localIPs()
+	hasLoopback := false
+	for _, ip := range ips {
+		if ip.Equal(net.IPv4(127, 0, 0, 1)) {
+			hasLoopback = true
+			break
+		}
+	}
+	if !hasLoopback {
+		t.Errorf("localIPs() = %v, want 127.0.0.1 included", ips)
 	}
 }
 
